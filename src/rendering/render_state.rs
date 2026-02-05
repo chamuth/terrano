@@ -286,6 +286,32 @@ impl RenderState {
         );
     }
     
+    pub fn resize_depth_texture(&mut self, width: u32, height: u32) {
+        // Only resize if dimensions changed
+        let current_size = self.depth_texture.size();
+        if current_size.width == width && current_size.height == height {
+            return;
+        }
+        
+        // Create new depth texture
+        self.depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        
+        self.depth_view = self.depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    }
+    
     pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),

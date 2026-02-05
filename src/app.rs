@@ -1,4 +1,4 @@
-use crate::rendering::RenderState;
+use crate::rendering::{RenderState, Viewport3D};
 use crate::terrain::{TerrainData, NoiseGenerator};
 use std::sync::Arc;
 
@@ -7,6 +7,7 @@ pub struct TerranoApp {
     show_properties: bool,
     show_layers: bool,
     render_state: Option<Arc<parking_lot::Mutex<RenderState>>>,
+    viewport: Option<Viewport3D>,
     
     // Noise generator parameters
     noise_seed: u32,
@@ -33,11 +34,15 @@ impl TerranoApp {
             )))
         });
         
+        // Create viewport widget
+        let viewport = render_state.as_ref().map(|rs| Viewport3D::new(rs.clone()));
+        
         Self {
             terrain: TerrainData::new(512, 512),
             show_properties: true,
             show_layers: true,
             render_state,
+            viewport,
             noise_seed: 42,
             noise_scale: 50.0,
             noise_octaves: 4,
@@ -197,63 +202,33 @@ impl eframe::App for TerranoApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("3D Viewport");
             
-            // Allocate space for 3D rendering
-            let (rect, response) = ui.allocate_exact_size(
-                ui.available_size(),
-                egui::Sense::click_and_drag(),
-            );
-            
             // Handle mouse input for camera controls
-            if let Some(render_state) = &self.render_state {
-                let mut state = render_state.lock();
+            if let Some(viewport) = &mut self.viewport {
+                let response = viewport.ui(ui);
                 
-                // Update camera aspect ratio
-                let aspect = rect.width() / rect.height();
-                state.update_camera(aspect);
-                
-                // Handle mouse drag for orbit (Unity-style controls)
-                if response.dragged_by(egui::PointerButton::Middle) {
-                    let delta = response.drag_delta();
-                    // Unity-style: negate horizontal, keep vertical as-is
-                    state.camera_mut().orbit(
-                        -delta.x * 0.01,
-                        delta.y * 0.01,
-                    );
+                // Handle camera controls
+                if let Some(render_state) = &self.render_state {
+                    let mut state = render_state.lock();
+                    
+                    // Handle mouse drag for orbit (Unity-style controls)
+                    if response.dragged_by(egui::PointerButton::Middle) {
+                        let delta = response.drag_delta();
+                        state.camera_mut().orbit(
+                            -delta.x * 0.01,
+                            delta.y * 0.01,
+                        );
+                    }
+                    
+                    // Handle scroll for zoom
+                    let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+                    if scroll_delta.abs() > 0.0 {
+                        state.camera_mut().zoom(scroll_delta * 0.005);
+                    }
                 }
-                
-                // Handle scroll for zoom
-                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll_delta.abs() > 0.0 {
-                    state.camera_mut().zoom(scroll_delta * 0.005);
-                }
-            }
-            
-            // Render 3D content using wgpu
-            if let Some(render_state) = &self.render_state {
-                let render_state_clone = render_state.clone();
-                
-                let callback = egui_wgpu::Callback::new_paint_callback(
-                    rect,
-                    crate::rendering::Renderer3D::new(render_state_clone),
-                );
-                
-                ui.painter().add(callback);
             } else {
                 // Fallback if wgpu is not available
-                ui.painter().rect_filled(
-                    rect,
-                    0.0,
-                    egui::Color32::from_rgb(50, 50, 50),
-                );
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "wgpu not available",
-                    egui::FontId::proportional(16.0),
-                    egui::Color32::WHITE,
-                );
+                ui.label("3D rendering not available");
             }
         });
     }
 }
-
