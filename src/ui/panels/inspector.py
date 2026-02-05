@@ -45,20 +45,35 @@ class InspectorPanel(QWidget):
         for prop_name, prop_data in self.current_entity.properties.items():
             dtype = prop_data["type"]
             val = prop_data["value"]
+            options = prop_data.get("options")
             
             widget = None
             
-            if dtype == int:
+            # Dropdown Support
+            if options is not None:
+                from PyQt6.QtWidgets import QComboBox
+                widget = QComboBox()
+                widget.addItems([str(opt) for opt in options])
+                
+                # Find current index
+                current_text = str(val)
+                index = widget.findText(current_text)
+                if index >= 0:
+                    widget.setCurrentIndex(index)
+                    
+                widget.currentTextChanged.connect(lambda v, p=prop_name: self.update_prop(p, v))
+                
+            elif dtype == int:
                 widget = QSpinBox()
-                widget.setRange(prop_data.get("min", -9999), prop_data.get("max", 9999))
+                widget.setRange(prop_data.get("min", -999999), prop_data.get("max", 999999))
                 widget.setValue(val)
-                # Capture prop_name in closure (default arg trick)
                 widget.valueChanged.connect(lambda v, p=prop_name: self.update_prop(p, v))
                 
             elif dtype == float:
                 widget = QDoubleSpinBox()
-                widget.setRange(prop_data.get("min", -9999.0), prop_data.get("max", 9999.0))
+                widget.setRange(prop_data.get("min", -999999.0), prop_data.get("max", 999999.0))
                 widget.setValue(val)
+                widget.setSingleStep(0.1)
                 widget.valueChanged.connect(lambda v, p=prop_name: self.update_prop(p, v))
                 
             elif dtype == bool:
@@ -66,9 +81,32 @@ class InspectorPanel(QWidget):
                 widget.setChecked(val)
                 widget.toggled.connect(lambda v, p=prop_name: self.update_prop(p, v))
                 
+            elif dtype == str:
+                 widget = QLineEdit(str(val))
+                 widget.textChanged.connect(lambda v, p=prop_name: self.update_prop(p, v))
+
             if widget:
+                # Add label
                 self.form_layout.addRow(prop_name, widget)
 
     def update_prop(self, name, value):
         if self.current_entity:
+            # Need strict typing based on definition
+            dtype = self.current_entity.properties[name]["type"]
+            
+            # Cast if necessary (especially for string inputs or combo box)
+            try:
+                if dtype == int:
+                    value = int(value)
+                elif dtype == float:
+                    value = float(value)
+            except:
+                pass
+
             self.current_entity.set_property(name, value)
+            
+            # If the property change affects the structure or available properties (like Type change),
+            # we might need to rebuild UI.
+            # Simple heuristic: rebuild if "Type" changed
+            if name == "Type":
+                self.build_ui()

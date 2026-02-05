@@ -18,7 +18,7 @@ class EditorWindow(QMainWindow):
         self.setDockNestingEnabled(True)
         
         # Data Model
-        self.root_terrain = TerrainEntity(size=1024)
+        self.root_terrain = TerrainEntity()
         
         # We also need the raw TerrainData for the Viewport to render
         self.render_data = TerrainData(size=1024)
@@ -38,7 +38,11 @@ class EditorWindow(QMainWindow):
         # Connect Signals
         self.hierarchy.tree.itemClicked.connect(self.on_selection_changed)
         
-        # Listen to entity changes to re-process terrain
+        # Listen to entity structure changes (add/remove/reorder)
+        # We assume the HierarchyPanel emits structure_changed on the root for Drag/Drop
+        # But we also need to catch additions/removals if they happen elsewhere?
+        # For now, HierarchyPanel actions trigger root.structure_changed.
+        self.root_terrain.structure_changed.connect(self.schedule_update)
         self.root_terrain.changed.connect(self.schedule_update)
         
         # Generate initial terrain
@@ -66,13 +70,26 @@ class EditorWindow(QMainWindow):
         self.dock_inspector.setMinimumWidth(350)
 
     def on_selection_changed(self, item, column):
-        entity = item.data(0, Qt.ItemDataRole.UserRole)
+        # The HierarchyPanel now stores IDs, not objects.
+        # Use helper method to retrieve the entity.
+        entity = self.hierarchy.get_entity_from_item(item)
+        if not entity: return
+        
         self.inspector.set_entity(entity)
-        # Connect change signal of CURRENT entity to reprocess
+        
+        # We need to listen to changes on ANY selected entity to update the view
+        # A simple way to ensure we catch everything is recursively connecting or just connecting on selection.
+        # Connecting on selection handles property tweaks.
+        # But structure changes (drag/drop) are handled by root signal above.
+        
+        # Disconnect old unique connection if we stored it?
+        # Actually Qt handles multiple connections fine, but we don't want duplicates.
+        # We can try/except disconnect.
         try:
             entity.changed.disconnect(self.schedule_update)
         except:
-            pass
+            pass # Was not connected
+            
         entity.changed.connect(self.schedule_update)
     
     def schedule_update(self):

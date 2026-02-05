@@ -15,7 +15,8 @@ class TerrainWorker(QThread):
         """Generate terrain in background thread"""
         try:
             # Get terrain size
-            size = self.terrain_entity.get_property("Size")
+            size_str = self.terrain_entity.get_property("Resolution")
+            size = int(size_str) if size_str else 1024
             
             # Create empty heightmap
             heightmap = np.zeros((size, size), dtype=np.float32)
