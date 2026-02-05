@@ -1,5 +1,5 @@
 use crate::rendering::RenderState;
-use crate::terrain::TerrainData;
+use crate::terrain::{TerrainData, NoiseGenerator};
 use std::sync::Arc;
 
 pub struct TerranoApp {
@@ -7,7 +7,13 @@ pub struct TerranoApp {
     show_properties: bool,
     show_layers: bool,
     render_state: Option<Arc<parking_lot::Mutex<RenderState>>>,
-    last_mouse_pos: Option<egui::Pos2>,
+    
+    // Noise generator parameters
+    noise_seed: u32,
+    noise_scale: f64,
+    noise_octaves: usize,
+    noise_persistence: f64,
+    noise_lacunarity: f64,
 }
 
 impl TerranoApp {
@@ -32,13 +38,45 @@ impl TerranoApp {
             show_properties: true,
             show_layers: true,
             render_state,
-            last_mouse_pos: None,
+            noise_seed: 42,
+            noise_scale: 50.0,
+            noise_octaves: 4,
+            noise_persistence: 0.5,
+            noise_lacunarity: 2.0,
         }
+    }
+    
+    fn generate_terrain(&mut self) {
+        log::info!("Generating terrain with seed: {}", self.noise_seed);
+        
+        let generator = NoiseGenerator::new(self.noise_seed)
+            .with_scale(self.noise_scale)
+            .with_octaves(self.noise_octaves)
+            .with_persistence(self.noise_persistence)
+            .with_lacunarity(self.noise_lacunarity);
+        
+        // Generate heightmap
+        let width = self.terrain.width();
+        let height = self.terrain.height();
+        
+        for y in 0..height {
+            for x in 0..width {
+                let noise_value = generator.generate(x as f64, y as f64);
+                // Scale to terrain height range (0 to 100)
+                let height_value = (noise_value * 100.0) as f32;
+                self.terrain.heightmap_mut().set(x, y, height_value);
+            }
+        }
+        
+        log::info!("Terrain generation complete");
     }
 }
 
 impl eframe::App for TerranoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Request 60 FPS for smooth rendering
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -110,10 +148,32 @@ impl eframe::App for TerranoApp {
                     ));
                     
                     ui.separator();
+                    ui.heading("Noise Generator");
+                    
+                    ui.label("Seed:");
+                    ui.add(egui::DragValue::new(&mut self.noise_seed).speed(1.0));
+                    
+                    ui.label("Scale:");
+                    ui.add(egui::Slider::new(&mut self.noise_scale, 1.0..=200.0));
+                    
+                    ui.label("Octaves:");
+                    ui.add(egui::Slider::new(&mut self.noise_octaves, 1..=8));
+                    
+                    ui.label("Persistence:");
+                    ui.add(egui::Slider::new(&mut self.noise_persistence, 0.0..=1.0));
+                    
+                    ui.label("Lacunarity:");
+                    ui.add(egui::Slider::new(&mut self.noise_lacunarity, 1.0..=4.0));
+                    
+                    ui.separator();
+                    if ui.button("Generate Terrain").clicked() {
+                        self.generate_terrain();
+                    }
+                    
+                    ui.separator();
                     ui.label("Camera Controls:");
                     ui.label("• Middle Mouse: Rotate");
                     ui.label("• Scroll: Zoom");
-                    ui.label("• Right Mouse: Pan (TODO)");
                 });
         }
         
@@ -145,19 +205,20 @@ impl eframe::App for TerranoApp {
                 let aspect = rect.width() / rect.height();
                 state.update_camera(aspect);
                 
-                // Handle mouse drag for orbit
+                // Handle mouse drag for orbit (Unity-style controls)
                 if response.dragged_by(egui::PointerButton::Middle) {
                     let delta = response.drag_delta();
+                    // Unity-style: negate horizontal, keep vertical as-is
                     state.camera_mut().orbit(
-                        delta.x * 0.01,
-                        -delta.y * 0.01,
+                        -delta.x * 0.01,
+                        delta.y * 0.01,
                     );
                 }
                 
                 // Handle scroll for zoom
                 let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll_delta.abs() > 0.0 {
-                    state.camera_mut().zoom(scroll_delta * 0.01);
+                    state.camera_mut().zoom(scroll_delta * 0.005);
                 }
             }
             

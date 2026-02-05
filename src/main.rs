@@ -17,6 +17,7 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_title("Terrano - Terrain Generation Software"),
+        vsync: true, // Enable vsync for smoother rendering
         ..Default::default()
     };
     
@@ -24,6 +25,11 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Terrano",
         options,
-        Box::new(|cc| Ok(Box::new(TerranoApp::new(cc)))),
+        Box::new(|cc| {
+            // Set max FPS to 60
+            cc.egui_ctx.set_pixels_per_point(1.0);
+            Ok(Box::new(TerranoApp::new(cc)))
+        }),
     )
 }
+
