@@ -134,13 +134,7 @@ impl RenderState {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
+            depth_stencil: None, // Can't use depth buffer with egui's PaintCallback
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -151,7 +145,7 @@ impl RenderState {
         });
         
         // Create initial flat terrain mesh (will be replaced when user generates terrain)
-        let (vertices, indices) = Self::create_flat_terrain(64, 64);
+        let (vertices, indices) = Self::create_flat_terrain(32, 32); // Reduced from 64x64
         
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),

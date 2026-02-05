@@ -36,8 +36,8 @@ impl Camera {
             pitch: 30.0_f32.to_radians(),
             fov: 45.0,
             aspect,
-            near: 0.1,
-            far: 1000.0,
+            near: 1.0,  // Increased from 0.1 for better depth precision
+            far: 100.0, // Reduced from 1000.0 to improve near/far ratio
         };
         camera.update_position();
         camera

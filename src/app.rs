@@ -38,7 +38,7 @@ impl TerranoApp {
         let viewport = render_state.as_ref().map(|rs| Viewport3D::new(rs.clone()));
         
         Self {
-            terrain: TerrainData::new(512, 512),
+            terrain: TerrainData::new(128, 128), // Reduced from 512x512 to minimize Z-fighting
             show_properties: true,
             show_layers: true,
             render_state,
