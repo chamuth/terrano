@@ -47,6 +47,7 @@ pub struct RenderState {
     pub(crate) uniform_bind_group: wgpu::BindGroup,
     pub(crate) depth_texture: wgpu::Texture,
     pub(crate) depth_view: wgpu::TextureView,
+    pub(crate) target_format: wgpu::TextureFormat,
     camera: Camera,
 }
 
@@ -193,6 +194,7 @@ impl RenderState {
             uniform_bind_group,
             depth_texture,
             depth_view,
+            target_format: format,
             camera,
         }
     }

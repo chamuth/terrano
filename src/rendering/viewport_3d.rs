@@ -74,7 +74,7 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            format: state.target_format, // Use the same format as the pipeline
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
