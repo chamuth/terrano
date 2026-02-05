@@ -1,45 +1,7 @@
-# Build directories
-build/
-cmake-build-*/
-out/
-bin/
-lib/
-
-# Visual Studio
-.vs/
-*.user
-*.suo
-*.sln
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-*.cmake
-!CMakeLists.txt
-
-# Qt
-*.qm
-*.autosave
-*.pro.user
-*.pro.user.*
-moc_*.cpp
-ui_*.h
-qrc_*.cpp
-
-# Compiled files
-*.o
-*.obj
-*.exe
-*.dll
-*.so
-*.dylib
-*.a
-*.lib
+# Build artifacts
+/target/
+**/*.rs.bk
+*.pdb
 
 # IDE
 .vscode/
@@ -56,15 +18,6 @@ desktop.ini
 # Logs
 *.log
 
-# Temporary files
-*.tmp
-*.temp
-*.bak
-*.cache
-
-# Project-specific
-*.ter
-*.heightmap
-*.terrain
-projects/
+# Project files
+*.terrano
 exports/

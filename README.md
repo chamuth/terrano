@@ -1,6 +1,6 @@
-# Terrano - Terrain Generation Software
+# Terrano - Terrain Generation Software (Rust)
 
-A professional terrain generation and procedural asset development tool for BeamNG.drive game mods.
+A professional terrain generation and procedural asset development tool for BeamNG.drive game mods, built with Rust.
 
 ## Features
 
@@ -9,105 +9,131 @@ A professional terrain generation and procedural asset development tool for Beam
 - **Real-time Preview**: Interactive 3D viewport with playable walk mode
 - **BeamNG.drive Export**: Direct export to BeamNG.drive compatible formats
 
-## Development Environment Setup
+## Why Rust?
+
+- **Memory Safety**: No null pointer crashes or memory leaks
+- **Performance**: Equal to C++ performance
+- **Modern**: Great tooling, package manager (Cargo), and ecosystem
+- **Concurrency**: Safe multi-threading with fearless concurrency
+
+## Technology Stack
+
+- **Language**: Rust 2021 edition
+- **UI**: egui (immediate mode GUI)
+- **Graphics**: wgpu (modern, cross-platform GPU API)
+- **Math**: glam + nalgebra
+- **Noise**: noise-rs
+- **Build**: Cargo
+
+## Quick Start
 
 ### Prerequisites
 
-1. **Visual Studio 2022** (Community Edition or higher)
-   - Download from: https://visualstudio.microsoft.com/downloads/
-   - During installation, select:
-     - "Desktop development with C++"
-     - Windows 10/11 SDK
-     - CMake tools for Windows
-
-2. **CMake** (3.20 or higher)
-   - Download from: https://cmake.org/download/
-   - Add to PATH during installation
-   - Or install via Visual Studio (included in C++ tools)
-
-3. **Qt 6** (6.5 or higher)
-   - Download from: https://www.qt.io/download-qt-installer
-   - Install Qt 6.5+ with MSVC 2022 64-bit component
-   - Add Qt to PATH: `C:\Qt\6.x.x\msvc2022_64\bin`
-
-4. **Git** (already installed ✓)
-   - Version: 2.49.0.windows.1
-
-5. **vcpkg** (for dependency management)
+1. **Rust** (1.70+)
    ```powershell
-   cd C:\
-   git clone https://github.com/Microsoft/vcpkg.git
-   cd vcpkg
-   .\bootstrap-vcpkg.bat
-   .\vcpkg integrate install
+   # Install rustup (Rust installer)
+   # Download from: https://rustup.rs/
+   # Or use:
+   winget install Rustlang.Rustup
    ```
 
-### Installing Dependencies via vcpkg
+2. **Visual Studio C++ Build Tools** (for Windows)
+   - Download from: https://visualstudio.microsoft.com/downloads/
+   - Select "Desktop development with C++"
+   - Or minimal: `winget install Microsoft.VisualStudio.2022.BuildTools`
+
+### Build and Run
 
 ```powershell
-# Navigate to vcpkg directory
-cd C:\vcpkg
+# Clone or navigate to project
+cd C:\Users\chamu\Projects\terrano
 
-# Install required libraries
-.\vcpkg install glm:x64-windows
-.\vcpkg install glfw3:x64-windows
-.\vcpkg install stb:x64-windows
-.\vcpkg install nlohmann-json:x64-windows
-.\vcpkg install eigen3:x64-windows
-.\vcpkg install assimp:x64-windows
-```
+# Build (first time will download dependencies)
+cargo build
 
-## Building the Project
+# Run in debug mode
+cargo run
 
-### Using Visual Studio 2022
+# Run in release mode (optimized)
+cargo run --release
 
-1. Open Visual Studio 2022
-2. File → Open → CMake → Select `CMakeLists.txt`
-3. Visual Studio will automatically configure CMake
-4. Build → Build All (Ctrl+Shift+B)
-5. Run → Start Debugging (F5)
+# Run tests
+cargo test
 
-### Using Command Line
-
-```powershell
-# Create build directory
-mkdir build
-cd build
-
-# Configure CMake (with vcpkg toolchain)
-cmake .. -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
-
-# Build
-cmake --build . --config Release
-
-# Run
-.\Release\Terrano.exe
+# Check code without building
+cargo check
 ```
 
 ## Project Structure
 
 ```
 terrano/
-├── src/                    # Source code
-│   ├── core/              # Core application logic
-│   ├── terrain/           # Terrain data structures
-│   ├── generators/        # Procedural generators
-│   ├── filters/           # Terrain filters
-│   ├── tools/             # Editing tools
-│   ├── rendering/         # OpenGL rendering
-│   ├── ui/                # Qt UI components
-│   ├── export/            # Export functionality
-│   └── utils/             # Utilities
-├── shaders/               # GLSL shaders
-├── resources/             # Icons, presets, templates
-├── docs/                  # Documentation
-├── CMakeLists.txt         # Root CMake configuration
-└── README.md              # This file
+├── Cargo.toml              # Rust dependencies and config
+├── Cargo.lock              # Dependency lock file
+├── src/
+│   ├── main.rs             # Application entry point
+│   ├── app.rs              # Main application struct
+│   ├── ui/
+│   │   ├── mod.rs          # UI module
+│   │   ├── main_window.rs  # Main window layout
+│   │   └── viewport.rs     # 3D viewport panel
+│   ├── rendering/
+│   │   ├── mod.rs          # Rendering module
+│   │   ├── camera.rs       # Camera controller
+│   │   ├── renderer.rs     # wgpu renderer
+│   │   └── shaders.wgsl    # WGSL shaders
+│   ├── terrain/
+│   │   ├── mod.rs          # Terrain module
+│   │   ├── heightmap.rs    # 2D heightmap
+│   │   └── terrain_data.rs # Terrain container
+│   ├── generators/
+│   │   ├── mod.rs          # Generators module
+│   │   └── perlin.rs       # Perlin noise generator
+│   ├── filters/
+│   │   ├── mod.rs          # Filters module
+│   │   └── erosion.rs      # Erosion simulation
+│   └── export/
+│       ├── mod.rs          # Export module
+│       └── beamng.rs       # BeamNG.drive exporter
+├── assets/                 # Shaders, icons, presets
+├── benches/                # Performance benchmarks
+└── tests/                  # Integration tests
 ```
 
-## Development Roadmap
+## Development
 
-See [implementation_plan.md](docs/implementation_plan.md) for detailed development phases.
+```powershell
+# Format code
+cargo fmt
+
+# Lint code
+cargo clippy
+
+# Run with logging
+$env:RUST_LOG="debug"; cargo run
+
+# Build documentation
+cargo doc --open
+
+# Run benchmarks
+cargo bench
+```
+
+## Rust Learning Resources
+
+- [The Rust Book](https://doc.rust-lang.org/book/)
+- [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
+- [egui Documentation](https://docs.rs/egui/)
+- [wgpu Tutorial](https://sotrh.github.io/learn-wgpu/)
+
+## Advantages Over C++
+
+✅ **No manual memory management** - Ownership system prevents leaks  
+✅ **No null pointer crashes** - Option<T> instead of null  
+✅ **No data races** - Compiler prevents concurrent access bugs  
+✅ **Better error handling** - Result<T, E> for explicit error handling  
+✅ **Modern tooling** - Cargo handles dependencies, building, testing  
+✅ **Fast compilation** - Incremental compilation with cargo  
 
 ## License
 
