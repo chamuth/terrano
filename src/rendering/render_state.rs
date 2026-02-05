@@ -45,8 +45,12 @@ pub struct RenderState {
     pub(crate) num_indices: u32,
     pub(crate) uniform_buffer: wgpu::Buffer,
     pub(crate) uniform_bind_group: wgpu::BindGroup,
+    pub(crate) depth_texture: wgpu::Texture,
+    pub(crate) depth_view: wgpu::TextureView,
     camera: Camera,
 }
+
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl RenderState {
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, format: wgpu::TextureFormat) -> Self {
@@ -129,7 +133,13 @@ impl RenderState {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -154,6 +164,24 @@ impl RenderState {
             usage: wgpu::BufferUsages::INDEX,
         });
         
+        // Create depth texture (initial size, will be resized as needed)
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width: 1280,
+                height: 720,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        
         Self {
             device,
             queue,
@@ -163,6 +191,8 @@ impl RenderState {
             num_indices: indices.len() as u32,
             uniform_buffer,
             uniform_bind_group,
+            depth_texture,
+            depth_view,
             camera,
         }
     }
