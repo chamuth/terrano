@@ -38,6 +38,8 @@ log = "0.4"
 # Utilities
 anyhow = "1.0"
 thiserror = "1.0"
+bytemuck = { version = "1.14", features = ["derive"] }
+parking_lot = "0.12"
 
 [dev-dependencies]
 criterion = "0.5"

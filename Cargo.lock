@@ -3736,6 +3736,7 @@ name = "terrano"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "criterion",
  "eframe",
  "egui",
@@ -3747,6 +3748,7 @@ dependencies = [
  "log",
  "nalgebra",
  "noise",
+ "parking_lot",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
