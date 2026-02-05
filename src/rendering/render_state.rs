@@ -121,10 +121,10 @@ impl RenderState {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
+                cull_mode: Some(wgpu::Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -213,6 +213,33 @@ impl RenderState {
     
     pub fn camera_mut(&mut self) -> &mut Camera {
         &mut self.camera
+    }
+    
+    pub fn update_terrain_mesh(&mut self, heightmap: &crate::terrain::Heightmap) {
+        use crate::rendering::terrain_mesh::TerrainMesh;
+        
+        log::info!("Updating terrain mesh");
+        
+        // Generate mesh from heightmap
+        let mesh = TerrainMesh::from_heightmap(heightmap, 0.1);
+        
+        // Update vertex buffer
+        self.vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Terrain Vertex Buffer"),
+            contents: bytemuck::cast_slice(&mesh.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        
+        // Update index buffer
+        self.index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Terrain Index Buffer"),
+            contents: bytemuck::cast_slice(&mesh.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        
+        self.num_indices = mesh.indices.len() as u32;
+        
+        log::info!("Terrain mesh updated: {} vertices, {} indices", mesh.vertices.len(), mesh.indices.len());
     }
     
     pub fn update_camera(&mut self, aspect: f32) {

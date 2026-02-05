@@ -68,6 +68,12 @@ impl TerranoApp {
             }
         }
         
+        // Update the 3D mesh
+        if let Some(render_state) = &self.render_state {
+            let mut state = render_state.lock();
+            state.update_terrain_mesh(self.terrain.heightmap());
+        }
+        
         log::info!("Terrain generation complete");
     }
 }
