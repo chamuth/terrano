@@ -82,15 +82,23 @@ class TerrainViewport(QWidget):
         
         # Brush state
         self.is_painting = False
+        self.is_panning = False
         self.brush_position = None
         
         # Connect mouse events
         self.canvas.events.mouse_move.connect(self.on_mouse_move)
         self.canvas.events.mouse_release.connect(self.on_mouse_release)
         self.canvas.events.resize.connect(self.on_resize)
+        
+        # We need to filter camera events for panning
+        # By default TurntableCamera handles interaction. We want to override it when Shift is pressed.
+        # But Vispy camera interaction is hardcoded in its viewbox event handler usually.
+        # So we just modify the camera center in our handler.
+        
+        self.last_pos = None
 
         self.update_mesh()
-    
+
     def on_resize(self, event):
         """Handle layout and overlay positioning"""
         w, h = event.size
@@ -104,14 +112,6 @@ class TerrainViewport(QWidget):
         padding = 0
         
         # Set pos/size of the ViewBox widget directly
-        # Pos is (x, y) from bottom-left in Vispy? Or Top-Left?
-        # Vispy coords usually: (0,0) is bottom-left for OpenGL, but widgets might differ.
-        # Let's verify: In Vispy SceneCanvas, 0,0 is bottom-left.
-        # But for Widgets, logical coordinate system might be used.
-        
-        # Let's assume (0,0) is bottom-left for now.
-        # Top-Right would be: x = w - size - padding, y = h - size - padding
-        
         self.gizmo_view.pos = (w - gizmo_size - padding, h - gizmo_size - padding)
         self.gizmo_view.size = (gizmo_size, gizmo_size)
 
@@ -122,7 +122,7 @@ class TerrainViewport(QWidget):
             self.gizmo_view.camera.azimuth = self.view.camera.azimuth
             self.gizmo_view.camera.elevation = self.view.camera.elevation
             self.gizmo_view.camera.roll = self.view.camera.roll
-    
+
     def create_brush_cursor(self):
         """Create a circular cursor for the brush"""
         # Create circle vertices
@@ -151,23 +151,7 @@ class TerrainViewport(QWidget):
         self.brush_cursor.set_data(pos=pos, connect='strip')
         self.brush_cursor.visible = True
         self.canvas.update()
-    
-    def on_mouse_move(self, event):
-        """Handle mouse movement for brush cursor"""
-        # Get world position
-        world_pos = self.get_world_position(event.pos)
-        if world_pos is not None:
-            self.brush_position = world_pos
-            self.update_brush_cursor(world_pos[0], world_pos[2])
-            
-            # If painting (mouse held down), apply brush
-            if self.is_painting and hasattr(self, 'on_paint_callback') and self.on_paint_callback:
-                self.on_paint_callback(world_pos[0], world_pos[2], self.brush_radius)
-    
-    def on_mouse_release(self, event):
-        """Handle mouse release"""
-        self.is_painting = False
-    
+
     def get_world_position(self, canvas_pos):
         """Convert canvas position to world position on Y=0 plane"""
         try:
@@ -189,10 +173,79 @@ class TerrainViewport(QWidget):
             pass
         return None
 
+    def on_mouse_move(self, event):
+        """Handle panning and brush cursor"""
+        
+        # Panning Logic (Shift + Left Drag OR Middle Mouse Drag)
+        if self.is_panning:
+            if self.last_pos is not None:
+                # Calculate delta
+                p1 = event.pos
+                p2 = self.last_pos
+                
+                # Get viewport size
+                w, h = self.canvas.size
+                
+                # Invert logic: Dragging Left means Pulling world Left -> Camera moves Right
+                # p1(curr) < p2(last) -> dx < 0. We want Camera X > 0.
+                # So we use (p2 - p1)
+                
+                dx_pixels = p2[0] - p1[0]
+                dy_pixels = p2[1] - p1[1]
+                
+                # Scale
+                scale = self.view.camera.distance * 2.0 / min(w, h)
+                
+                dx = dx_pixels * scale
+                dy = dy_pixels * scale
+                
+                # We need to move relative to camera azimuth
+                azimuth_rad = np.radians(self.view.camera.azimuth)
+                
+                # Move 'center'
+                center = list(self.view.camera.center)
+                
+                # Right vector
+                cx = np.sin(azimuth_rad)
+                cz = np.cos(azimuth_rad)
+                
+                # Forward vector
+                fx = -np.cos(azimuth_rad)
+                fz = np.sin(azimuth_rad)
+                
+                center[0] += dx * cx + dy * fx
+                center[2] += dx * cz + dy * fz
+                
+                self.view.camera.center = tuple(center)
+                self.canvas.update()
+                
+            # Update last_pos for next frame
+            self.last_pos = event.pos
+            event.handled = True
+            return
+
+    def on_mouse_release(self, event):
+        self.is_painting = False
+        self.is_panning = False
+        self.last_pos = None
+
     def on_mouse_press(self, event):
-        if event.button == 1:  # Left click
+        # Middle mouse button = panning
+        if event.button == 3:
+            self.is_panning = True
+            self.last_pos = None  # Reset to avoid initial jump
+            event.handled = True
+            return
+        
+        if event.button == 1:
+            # Block Shift+LMB (prevents default Vispy camera interaction moving the view)
+            if 'Shift' in event.modifiers:
+                event.handled = True
+                return
+
             # Start painting
             self.is_painting = True
+            self.last_pos = event.pos
             
             # Get world position and trigger paint
             world_pos = self.get_world_position(event.pos)
@@ -202,12 +255,7 @@ class TerrainViewport(QWidget):
             # Also call the old click callback if it exists
             if self.on_click_callback and world_pos is not None:
                 self.on_click_callback(world_pos[0], world_pos[2])
-            # Get ray from camera
-            # Transform mouse coords to normalized device coords (-1 to 1)
-            # Then unproject? Vispy makes this hard.
-            # Easier: View.scene.transform...
-            pass
-            
+        
             # Simple approach: Vispy Scene has a method to picking or mapping
             # transform = self.view.scene.transform
             # map_to_visual(visual, [x,y])
