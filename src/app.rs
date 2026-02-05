@@ -161,46 +161,16 @@ impl eframe::App for TerranoApp {
                 }
             }
             
-            // For now, render a placeholder until we implement custom wgpu callback
-            // The camera controls are working, we just need to wire up the actual rendering
-            if let Some(_render_state) = &self.render_state {
-                ui.painter().rect_filled(
+            // Render 3D content using wgpu
+            if let Some(render_state) = &self.render_state {
+                let render_state_clone = render_state.clone();
+                
+                let callback = egui_wgpu::Callback::new_paint_callback(
                     rect,
-                    0.0,
-                    egui::Color32::from_rgb(30, 30, 30),
-                );
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "3D Viewport - Camera controls active!\n\nMiddle Mouse: Rotate | Scroll: Zoom",
-                    egui::FontId::proportional(16.0),
-                    egui::Color32::from_rgb(150, 150, 150),
+                    crate::rendering::Renderer3D::new(render_state_clone),
                 );
                 
-                // Draw a simple grid pattern as placeholder
-                let painter = ui.painter();
-                let grid_spacing = 20.0;
-                let color = egui::Color32::from_rgb(60, 60, 60);
-                
-                // Vertical lines
-                let mut x = rect.left();
-                while x < rect.right() {
-                    painter.line_segment(
-                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                        egui::Stroke::new(1.0, color),
-                    );
-                    x += grid_spacing;
-                }
-                
-                // Horizontal lines
-                let mut y = rect.top();
-                while y < rect.bottom() {
-                    painter.line_segment(
-                        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                        egui::Stroke::new(1.0, color),
-                    );
-                    y += grid_spacing;
-                }
+                ui.painter().add(callback);
             } else {
                 // Fallback if wgpu is not available
                 ui.painter().rect_filled(

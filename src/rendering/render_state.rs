@@ -1,7 +1,6 @@
 use crate::rendering::Camera;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -38,14 +37,14 @@ struct Uniforms {
 }
 
 pub struct RenderState {
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+    pub(crate) device: Arc<wgpu::Device>,
+    pub(crate) queue: Arc<wgpu::Queue>,
+    pub(crate) pipeline: wgpu::RenderPipeline,
+    pub(crate) vertex_buffer: wgpu::Buffer,
+    pub(crate) index_buffer: wgpu::Buffer,
+    pub(crate) num_indices: u32,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) uniform_bind_group: wgpu::BindGroup,
     camera: Camera,
 }
 
@@ -251,6 +250,15 @@ impl RenderState {
             occlusion_query_set: None,
         });
         
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+    }
+    
+    /// Render directly to an existing render pass (for egui callback)
+    pub fn render_to_pass<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
