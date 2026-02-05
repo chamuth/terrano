@@ -20,7 +20,39 @@ class TerrainViewport(QWidget):
         
         # Camera Setup (Y-up for XZ terrain, 45-degree top-down view)
         # Distance increased to view 1km terrain
-        self.view.camera = vispy.scene.cameras.TurntableCamera(up='+y', elevation=45, azimuth=-45, fov=45, distance=1500)
+        # Camera Setup (Y-up for XZ terrain, 45-degree top-down view)
+        self.view.camera = vispy.scene.cameras.TurntableCamera(up='+y', elevation=1000, azimuth=-45, fov=45, distance=1500)
+        
+        # ---------------------------------------------------------
+        # Orientation Gizmo (Overlay)
+        # ---------------------------------------------------------
+        # We create a ViewBox that is NOT in the layout, but child of the canvas scene directly.
+        # This allows absolute positioning (Overlay).
+        self.gizmo_view = vispy.scene.widgets.ViewBox(parent=self.canvas.scene, bgcolor=None)
+        
+        # Gizmo camera: Fixed distance, syncs rotation only
+        # Distance determines gizmo size relative to view
+        # Increased scale to make it "zoomed out"
+        # interactive=False prevents user from zooming the gizmo independently
+        # center=(0, 1, 0) shifts the look-at point up, moving the gizmo down in view to show Y axis
+        self.gizmo_view.camera = vispy.scene.cameras.TurntableCamera(up='+y', elevation=150, azimuth=-45, fov=0, distance=150.0, center=(0, 0.5, 0))
+        self.gizmo_view.camera.interactive = False
+        
+        # Add visual to gizmo view
+        # We use separate lines for X, Y, Z to allow picking
+        # Length 2.0 covers the view nicely at distance 4.0
+        origin = np.array([[0,0,0]])
+        self.gizmo_x = visuals.Line(pos=np.vstack([origin, [[1,0,0]]]), color='#ff4444', width=2, parent=self.gizmo_view.scene)
+        self.gizmo_y = visuals.Line(pos=np.vstack([origin, [[0,1,0]]]), color='#44ff44', width=2, parent=self.gizmo_view.scene)
+        self.gizmo_z = visuals.Line(pos=np.vstack([origin, [[0,0,1]]]), color='#4444ff', width=2, parent=self.gizmo_view.scene)
+        
+        # Add labels
+        self.text_x = visuals.Text("X", pos=[1.2, 0, 0], color='#ff4444', font_size=10, bold=True, parent=self.gizmo_view.scene)
+        self.text_y = visuals.Text("Y", pos=[0, 1.2, 0], color='#44ff44', font_size=10, bold=True, parent=self.gizmo_view.scene)
+        self.text_z = visuals.Text("Z", pos=[0, 0, 1.2], color='#4444ff', font_size=10, bold=True, parent=self.gizmo_view.scene)
+
+        # We hook into draw to sync camera rotation
+        self.canvas.events.draw.connect(self.on_draw)
         
         # Events
         self.canvas.events.mouse_press.connect(self.on_mouse_press)
@@ -39,11 +71,6 @@ class TerrainViewport(QWidget):
         # Setting shading to smooth now that faces are fixed (Nx3)
         self.mesh = visuals.Mesh(shading='smooth', color='gray', parent=self.view.scene)
         
-        # Pathfinder Widget (Axis)
-        self.axis = visuals.XYZAxis(parent=self.view.scene, width=5)
-        # We can position it or make a separate ViewBox for it to stay in corner.
-        # For now, just placing it at origin for reference.
-        
         # Road Visuals
         self.road_line = visuals.Line(pos=np.array([[0,0,0], [0,0,0]]), color='red', width=10, parent=self.view.scene, method='gl')
         self.road_nodes = visuals.Markers(parent=self.view.scene)
@@ -60,8 +87,41 @@ class TerrainViewport(QWidget):
         # Connect mouse events
         self.canvas.events.mouse_move.connect(self.on_mouse_move)
         self.canvas.events.mouse_release.connect(self.on_mouse_release)
+        self.canvas.events.resize.connect(self.on_resize)
 
         self.update_mesh()
+    
+    def on_resize(self, event):
+        """Handle layout and overlay positioning"""
+        w, h = event.size
+        
+        # 1. Update Layout
+        # We do NOT set central_widget.max_size as it crashes (widget is frozen)
+        # self.canvas.central_widget.max_size = (w, h)
+        
+        # 2. Position Gizmo Overlay (Top-Right)
+        gizmo_size = 150
+        padding = 0
+        
+        # Set pos/size of the ViewBox widget directly
+        # Pos is (x, y) from bottom-left in Vispy? Or Top-Left?
+        # Vispy coords usually: (0,0) is bottom-left for OpenGL, but widgets might differ.
+        # Let's verify: In Vispy SceneCanvas, 0,0 is bottom-left.
+        # But for Widgets, logical coordinate system might be used.
+        
+        # Let's assume (0,0) is bottom-left for now.
+        # Top-Right would be: x = w - size - padding, y = h - size - padding
+        
+        self.gizmo_view.pos = (w - gizmo_size - padding, h - gizmo_size - padding)
+        self.gizmo_view.size = (gizmo_size, gizmo_size)
+
+    def on_draw(self, event):
+        """Sync gizmo camera rotation with main camera"""
+        if hasattr(self.view.camera, 'azimuth'):
+            # Directly copy rotation parameters
+            self.gizmo_view.camera.azimuth = self.view.camera.azimuth
+            self.gizmo_view.camera.elevation = self.view.camera.elevation
+            self.gizmo_view.camera.roll = self.view.camera.roll
     
     def create_brush_cursor(self):
         """Create a circular cursor for the brush"""
