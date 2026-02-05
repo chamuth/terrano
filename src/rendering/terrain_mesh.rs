@@ -53,13 +53,29 @@ impl TerrainMesh {
                 let pos_y = h * 0.1; // Scale height
                 let pos_z = (y as f32 - height as f32 / 2.0) * scale;
                 
-                // Color based on height (green to white gradient)
+                // Rainbow color based on height
                 let t = (h / 100.0).clamp(0.0, 1.0);
-                let color = [
-                    0.2 + t * 0.8,  // R
-                    0.6 + t * 0.4,  // G
-                    0.3 + t * 0.7,  // B
-                ];
+                let color = if t < 0.2 {
+                    // Blue to Cyan
+                    let local_t = t / 0.2;
+                    [0.0, local_t, 1.0]
+                } else if t < 0.4 {
+                    // Cyan to Green
+                    let local_t = (t - 0.2) / 0.2;
+                    [0.0, 1.0, 1.0 - local_t]
+                } else if t < 0.6 {
+                    // Green to Yellow
+                    let local_t = (t - 0.4) / 0.2;
+                    [local_t, 1.0, 0.0]
+                } else if t < 0.8 {
+                    // Yellow to Red
+                    let local_t = (t - 0.6) / 0.2;
+                    [1.0, 1.0 - local_t, 0.0]
+                } else {
+                    // Red to Magenta
+                    let local_t = (t - 0.8) / 0.2;
+                    [1.0, 0.0, local_t]
+                };
                 
                 vertices.push(TerrainVertex {
                     position: [pos_x, pos_y, pos_z],

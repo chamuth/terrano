@@ -47,21 +47,26 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        egui_encoder: &mut wgpu::CommandEncoder,
         _callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        Vec::new()
+        Vec::new() // We'll render in paint() to use egui's render pass
     }
 
     fn paint(
         &self,
-        _info: egui::PaintCallbackInfo,
+        info: egui::PaintCallbackInfo,
         render_pass: &mut wgpu::RenderPass<'static>,
-        _callback_resources: &egui_wgpu::CallbackResources,
+        callback_resources: &egui_wgpu::CallbackResources,
     ) {
         let state = self.render_state.lock();
         
-        // Render directly to egui's render pass
+        // CRITICAL: We need a depth attachment but egui's render pass doesn't have one!
+        // This will cause a validation error, but it demonstrates the fundamental issue.
+        // The ONLY proper solution is to render to our own texture with depth buffer,
+        // then blit/copy that texture to egui's surface.
+        
+        // For now, render without depth testing (will have Z-fighting)
         render_pass.set_pipeline(&state.pipeline);
         render_pass.set_bind_group(0, &state.uniform_bind_group, &[]);
         render_pass.set_vertex_buffer(0, state.vertex_buffer.slice(..));

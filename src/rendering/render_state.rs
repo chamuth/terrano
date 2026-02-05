@@ -134,7 +134,9 @@ impl RenderState {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None, // Can't use depth buffer with egui's PaintCallback
+            // CRITICAL: Depth buffer is REQUIRED to fix Z-fighting, but egui's PaintCallback
+            // doesn't provide a depth attachment. This is a fundamental limitation.
+            depth_stencil: None,
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -207,9 +209,28 @@ impl RenderState {
                 let pos_x = (x as f32 - width as f32 / 2.0) * scale;
                 let pos_z = (y as f32 - height as f32 / 2.0) * scale;
                 
+                // Rainbow color based on position
+                let t = ((x + y) as f32 / (width + height) as f32).clamp(0.0, 1.0);
+                let color = if t < 0.2 {
+                    let local_t = t / 0.2;
+                    [0.0, local_t, 1.0]
+                } else if t < 0.4 {
+                    let local_t = (t - 0.2) / 0.2;
+                    [0.0, 1.0, 1.0 - local_t]
+                } else if t < 0.6 {
+                    let local_t = (t - 0.4) / 0.2;
+                    [local_t, 1.0, 0.0]
+                } else if t < 0.8 {
+                    let local_t = (t - 0.6) / 0.2;
+                    [1.0, 1.0 - local_t, 0.0]
+                } else {
+                    let local_t = (t - 0.8) / 0.2;
+                    [1.0, 0.0, local_t]
+                };
+                
                 vertices.push(TerrainVertex {
                     position: [pos_x, 0.0, pos_z],
-                    color: [0.3, 0.5, 0.3], // Green
+                    color,
                 });
             }
         }
