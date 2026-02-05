@@ -107,7 +107,7 @@ impl RenderState {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[crate::rendering::terrain_mesh::TerrainVertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -139,8 +139,8 @@ impl RenderState {
             cache: None,
         });
         
-        // Create grid mesh
-        let (vertices, indices) = Self::create_grid(10, 10, 1.0);
+        // Create initial flat terrain mesh (will be replaced when user generates terrain)
+        let (vertices, indices) = Self::create_flat_terrain(64, 64);
         
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -167,45 +167,45 @@ impl RenderState {
         }
     }
     
-    fn create_grid(width: u32, height: u32, spacing: f32) -> (Vec<Vertex>, Vec<u16>) {
+    fn create_flat_terrain(width: u32, height: u32) -> (Vec<crate::rendering::terrain_mesh::TerrainVertex>, Vec<u32>) {
+        use crate::rendering::terrain_mesh::TerrainVertex;
+        
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         
-        let half_width = (width as f32 * spacing) / 2.0;
-        let half_height = (height as f32 * spacing) / 2.0;
+        let scale = 0.2;
         
-        // Create grid lines parallel to X axis
-        for z in 0..=height {
-            let z_pos = z as f32 * spacing - half_height;
-            vertices.push(Vertex {
-                position: [-half_width, 0.0, z_pos],
-                color: [0.3, 0.3, 0.3],
-            });
-            vertices.push(Vertex {
-                position: [half_width, 0.0, z_pos],
-                color: [0.3, 0.3, 0.3],
-            });
-            
-            let base = vertices.len() as u16 - 2;
-            indices.push(base);
-            indices.push(base + 1);
+        // Generate vertices for a flat grid
+        for y in 0..=height {
+            for x in 0..=width {
+                let pos_x = (x as f32 - width as f32 / 2.0) * scale;
+                let pos_z = (y as f32 - height as f32 / 2.0) * scale;
+                
+                vertices.push(TerrainVertex {
+                    position: [pos_x, 0.0, pos_z],
+                    color: [0.3, 0.5, 0.3], // Green
+                });
+            }
         }
         
-        // Create grid lines parallel to Z axis
-        for x in 0..=width {
-            let x_pos = x as f32 * spacing - half_width;
-            vertices.push(Vertex {
-                position: [x_pos, 0.0, -half_height],
-                color: [0.3, 0.3, 0.3],
-            });
-            vertices.push(Vertex {
-                position: [x_pos, 0.0, half_height],
-                color: [0.3, 0.3, 0.3],
-            });
-            
-            let base = vertices.len() as u16 - 2;
-            indices.push(base);
-            indices.push(base + 1);
+        // Generate indices for triangles
+        for y in 0..height {
+            for x in 0..width {
+                let top_left = (y * (width + 1) + x) as u32;
+                let top_right = (y * (width + 1) + x + 1) as u32;
+                let bottom_left = ((y + 1) * (width + 1) + x) as u32;
+                let bottom_right = ((y + 1) * (width + 1) + x + 1) as u32;
+                
+                // First triangle
+                indices.push(top_left);
+                indices.push(bottom_left);
+                indices.push(top_right);
+                
+                // Second triangle
+                indices.push(top_right);
+                indices.push(bottom_left);
+                indices.push(bottom_right);
+            }
         }
         
         (vertices, indices)
