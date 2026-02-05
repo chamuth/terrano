@@ -98,6 +98,11 @@ class TerrainViewport(QWidget):
         self.last_pos = None
 
         self.update_mesh()
+        
+    def set_data(self, terrain_data):
+        """Update the terrain data reference"""
+        self.terrain_data = terrain_data
+        self.update_mesh()
 
     def on_resize(self, event):
         """Handle layout and overlay positioning"""

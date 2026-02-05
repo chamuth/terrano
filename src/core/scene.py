@@ -21,11 +21,16 @@ class Entity(QObject):
         self.entity_type = entity_type
         self._parent = None
         self._children = []
-        self._enabled = True
+        # _enabled is now redundant with properties["Enabled"], but helpful for quick access
+        # However, plan says "Add property" so UI can see it.
+        # We'll sync them.
         
         # Generic Properties Dictionary using a custom schema
         # { "prop_name": { "type": float, "value": 1.0, "min": 0, "max": 100, "options": [] } }
         self.properties = {} 
+        
+        # Add Enabled Property (default True)
+        self.define_property("Enabled", bool, True)
 
         if parent:
             self.set_parent(parent)
@@ -71,7 +76,8 @@ class Entity(QObject):
         heightmap: The shared heightmap array (modified in-place).
         mask: The current scoped mask (0.0 - 1.0). None implies 1.0 everywhere.
         """
-        if not self._enabled:
+        # Check property instead of private flag
+        if not self.get_property("Enabled"):
             return
 
         # 1. Apply Self Logic
@@ -113,7 +119,7 @@ class TerrainEntity(Entity):
     def __init__(self):
         super().__init__("Terrain", entity_type=EntityType.ROOT)
         # Resolution as options
-        self.define_property("Resolution", str, "1024", options=["1024", "2048", "4096"])
+        self.define_property("Resolution", str, "1024", options=["512", "1024", "2048", "4096"])
         self.define_property("Base Height", float, 0.0, -1000.0, 1000.0)
         
     def on_process(self, heightmap, mask):

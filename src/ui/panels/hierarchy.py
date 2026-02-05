@@ -1,7 +1,6 @@
-
 from PyQt6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QMenu, QWidget, QVBoxLayout, 
                              QToolBar, QAbstractItemView)
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtGui import QAction, QIcon, QBrush
 from PyQt6.QtCore import Qt
 from src.core.scene import TerrainEntity, FilterEntity, MaskEntity, GeneratorEntity, EntityType
 
@@ -43,10 +42,13 @@ class HierarchyPanel(QWidget):
         self.tree.setAcceptDrops(True)
         self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         
+        self.tree.setAcceptDrops(True)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        
         # Override dropEvent and dragMoveEvent
         self.tree.dropEvent = self.on_drop_event
         self.tree.dragMoveEvent = self.on_drag_move_event
-
+        
         self.layout.addWidget(self.tree)
         self.setLayout(self.layout)
         
@@ -87,8 +89,21 @@ class HierarchyPanel(QWidget):
         
         parent_item.addChild(item)
         
+        # Apply initial visual state
+        self.update_item_style(item, entity)
+        
         for child in entity.get_children():
             self.add_node(child, item)
+
+    def update_item_style(self, item, entity):
+        is_enabled = entity.get_property("Enabled")
+        
+        if is_enabled:
+            # Default color (None resets to theme default)
+            item.setForeground(0, QBrush()) 
+        else:
+            # Grayed out
+            item.setForeground(0, QBrush(Qt.GlobalColor.gray))
 
     def get_entity_from_item(self, item):
         if not item: return None
@@ -98,10 +113,6 @@ class HierarchyPanel(QWidget):
     def on_item_clicked(self, item, column):
         entity = self.get_entity_from_item(item)
         self.update_ui_state()
-        # MainWindow connects via signal on tree click, but we store ID now.
-        # EditorWindow might expect Object.
-        # We need to signal EditorWindow manually or update EditorWindow to lookup.
-        # Easier: EditorWindow can call a method on HierarchyPanel to get object.
         pass
 
     def can_accept_child(self, parent_entity, child_type):
@@ -298,11 +309,24 @@ class HierarchyPanel(QWidget):
             menu.addAction("Add Mask", lambda: self.safe_add(entity, EntityType.MASK))
             menu.addSeparator()
             
+        # Toggle Enable
+        is_enabled = entity.get_property("Enabled")
+        toggle_text = "Disable" if is_enabled else "Enable"
+        toggle_action = menu.addAction(toggle_text)
+        
+        menu.addSeparator()
         del_action = menu.addAction("Delete")
         
         action = menu.exec(self.tree.viewport().mapToGlobal(position))
         
-        if action == del_action:
+        if action == toggle_action:
+            new_state = not is_enabled
+            entity.set_property("Enabled", new_state)
+            # Update visual style immediately (though changed signal might trigger full refresh)
+            self.update_item_style(item, entity)
+            # Also trigger main window update handled by entity.changed signal
+        
+        elif action == del_action:
             if entity != self.root_entity:
                 entity.set_parent(None)
                 self.refresh_tree()
