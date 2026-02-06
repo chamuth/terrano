@@ -32,6 +32,16 @@ class HeightmapViewport(QWidget):
         self.terrain_data = terrain_data
         self.update_image()
         
+    def reset_camera(self):
+        """Reset camera to fit the image"""
+        if self.image._data is None:
+            return
+            
+        h, w = self.image._data.shape[:2]
+        # Margin
+        margin = max(h, w) * 0.05
+        self.view.camera.set_range(x=(-margin, w+margin), y=(-margin, h+margin))
+        
     def update_image(self):
         # Vispy Image expects (H, W) or (H, W, 3/4)
         # TerrainData is (N, 3), we need to maintain a 2D grid representation

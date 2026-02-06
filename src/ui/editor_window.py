@@ -31,7 +31,7 @@ class EditorWindow(QMainWindow):
         self.root_terrain = TerrainEntity()
         
         # We also need the raw TerrainData for the Viewport to render
-        self.render_data = TerrainData(size=1024)
+        self.render_data = TerrainData(size=512)
         self.road_net = RoadNetwork()
         
         # Undo Stack
@@ -40,6 +40,7 @@ class EditorWindow(QMainWindow):
         # Threading
         self.terrain_worker = None
         self.pending_update = False
+        self.initial_fit_done = False
         
         # Debounce timer (wait for user to stop adjusting before regenerating)
         self.update_timer = QTimer()
@@ -49,7 +50,8 @@ class EditorWindow(QMainWindow):
         self.init_ui()
         
         # Connect Signals
-        self.hierarchy.tree.itemClicked.connect(self.on_selection_changed)
+        # Use itemSelectionChanged to capture programmatic changes (Undo/Redo) too
+        self.hierarchy.tree.itemSelectionChanged.connect(self.on_selection_changed)
         
         # Listen to entity structure changes (add/remove/reorder)
         # We assume the HierarchyPanel emits structure_changed on the root for Drag/Drop
@@ -196,6 +198,13 @@ class EditorWindow(QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction(QAction("Preferences...", self, enabled=False))
         
+        # -- View Menu --
+        view_menu = menu_bar.addMenu("&View")
+        fit_action = QAction("Fit to View", self)
+        fit_action.setShortcut("F")
+        fit_action.triggered.connect(self.fit_to_view)
+        view_menu.addAction(fit_action)
+
         # -- Window Menu --
         self.window_menu = menu_bar.addMenu("&Window")
         self.update_window_menu()
@@ -291,12 +300,42 @@ class EditorWindow(QMainWindow):
         self.lbl_verts.setText(f"Verts: {v_count:,}")
         self.lbl_faces.setText(f"Faces: {f_count:,}")
 
+    def fit_to_view(self):
+        """Reset cameras to fit content"""
+        # Fit 3D
+        if self.viewport_3d:
+            self.viewport_3d.reset_camera()
+            
+        # Fit 2D
+        if self.viewport_2d:
+            self.viewport_2d.reset_camera()
 
-    def on_selection_changed(self, item, column):
+    def fit_to_view(self):
+        """Reset cameras to fit content"""
+        # Fit 3D
+        if self.viewport_3d:
+            self.viewport_3d.reset_camera()
+            
+        # Fit 2D
+        if self.viewport_2d:
+            self.viewport_2d.reset_camera()
+
+
+    def on_selection_changed(self):
+        # Get selected items
+        items = self.hierarchy.tree.selectedItems()
+        if not items:
+            self.inspector.set_entity(None)
+            return
+            
+        item = items[0]
+        
         # The HierarchyPanel now stores IDs, not objects.
         # Use helper method to retrieve the entity.
         entity = self.hierarchy.get_entity_from_item(item)
-        if not entity: return
+        if not entity: 
+            self.inspector.set_entity(None)
+            return
         
         self.inspector.set_entity(entity)
         
@@ -337,13 +376,13 @@ class EditorWindow(QMainWindow):
         self.terrain_worker.finished.connect(self.on_terrain_generated)
         self.terrain_worker.start()
     
-    def on_terrain_generated(self, heightmap):
+    def on_terrain_generated(self, heightmap, phys_size):
         """Called when background terrain generation completes"""
         
-        # Check if resolution changed
-        if self.render_data.heightmap.shape != heightmap.shape:
+        # Check if resolution or scale changed
+        if self.render_data.heightmap.shape != heightmap.shape or self.render_data.scale != phys_size:
             # Re-initialize render data with new size
-            current_scale = self.render_data.scale
+            current_scale = phys_size
             new_size = heightmap.shape[0]
             
             # Create new container
@@ -365,6 +404,11 @@ class EditorWindow(QMainWindow):
         # UI Feedback
         self.status_label.setText("Ready")
         self.progress_indicator.stopAnimation()
+        
+        # Initial Fit
+        if not self.initial_fit_done:
+            self.fit_to_view()
+            self.initial_fit_done = True
 
     def closeEvent(self, event):
         # Save Session State

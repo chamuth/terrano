@@ -39,7 +39,8 @@ class TerrainViewport(QWidget):
         # Camera Setup (Y-up for XZ terrain, 45-degree top-down view)
         # Distance increased to view 1km terrain
         # Camera Setup (Y-up for XZ terrain, 45-degree top-down view)
-        self.view.camera = vispy.scene.cameras.TurntableCamera(up='+y', elevation=1000, azimuth=-45, fov=45, distance=1500)
+        # Default ISO view: 45 deg azimuth, 45 deg elevation
+        self.view.camera = vispy.scene.cameras.TurntableCamera(up='+y', elevation=45, azimuth=45, fov=45, distance=1500, center=(0, 0, 0))
         
         # ---------------------------------------------------------
         # Orientation Gizmo (Overlay)
@@ -92,7 +93,10 @@ class TerrainViewport(QWidget):
         # Terrain Mesh
         # Setting shading to smooth now that faces are fixed (Nx3)
         # We use a ShadingFilter to control light direction
-        self.light_dir = (-10, 10, -10) # Initial light direction (Top-Left)
+        # We use a ShadingFilter to control light direction
+        # Default Light: Match Camera (Azimuth 45, Elevation 45)
+        # Vector approx (10, 14, 10) -> Normalized roughly (0.5, 0.7, 0.5)
+        self.light_dir = (10, 14, 10) 
         self.shading_filter = ShadingFilter(shading='smooth', light_dir=self.light_dir)
         self.mesh = visuals.Mesh(color='gray', parent=self.view.scene)
         
@@ -134,6 +138,18 @@ class TerrainViewport(QWidget):
         """Update the terrain data reference"""
         self.terrain_data = terrain_data
         self.update_mesh()
+
+    def reset_camera(self):
+        """Reset camera to default view fitting the terrain"""
+        self.view.camera.center = (0, 0, 0)
+        self.view.camera.azimuth = 45
+        self.view.camera.elevation = 45
+        # Distance approx 1.5x physical scale if available, else 1500
+        dist = 1500
+        if hasattr(self.terrain_data, 'scale'):
+            dist = self.terrain_data.scale * 1.5
+        self.view.camera.distance = dist
+        self.canvas.update()
 
     def on_resize(self, event):
         """Handle layout and overlay positioning"""

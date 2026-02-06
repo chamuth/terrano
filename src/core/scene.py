@@ -74,26 +74,27 @@ class Entity(QObject):
     def get_children(self):
         return self._children
 
-    def process(self, heightmap, mask=None):
+    def process(self, heightmap, mask=None, terrain_size=1000.0):
         """
         Recursive processing pipeline.
         heightmap: The shared heightmap array (modified in-place).
         mask: The current scoped mask (0.0 - 1.0). None implies 1.0 everywhere.
+        terrain_size: Physical size of the terrain (for scale-independent generation)
         """
         # Check property instead of private flag
         if not self.get_property("Enabled"):
             return
 
         # 1. Apply Self Logic
-        self.on_process(heightmap, mask)
+        self.on_process(heightmap, mask, terrain_size)
         
         # 2. Process Children
         # If we are a Mask, we handle children differently (scoped)
         if self.entity_type != EntityType.MASK:
             for child in self._children:
-                child.process(heightmap, mask)
+                child.process(heightmap, mask, terrain_size)
                 
-    def on_process(self, heightmap, mask):
+    def on_process(self, heightmap, mask, terrain_size):
         pass
 
     def define_property(self, name, dtype, value, min_val=None, max_val=None, options=None):
@@ -123,10 +124,11 @@ class TerrainEntity(Entity):
     def __init__(self):
         super().__init__("Terrain", entity_type=EntityType.ROOT)
         # Resolution as options
-        self.define_property("Resolution", str, "1024", options=["512", "1024", "2048", "4096"])
+        self.define_property("Resolution", str, "512", options=["512", "1024", "2048", "4096"])
+        self.define_property("Size", float, 1000.0, 100.0, 10000.0) # Physical Size
         self.define_property("Base Height", float, 0.0, -1000.0, 1000.0)
         
-    def on_process(self, heightmap, mask):
+    def on_process(self, heightmap, mask, terrain_size):
         # Base terrain just clears the heightmap to base height
         # But commonly Generators will overwrite this immediately.
         # If no generators, we likely want a flat plane.
@@ -165,7 +167,7 @@ class GeneratorEntity(Entity):
             # We could dynamically hide/show props here if Inspector supports it
             pass
 
-    def on_process(self, heightmap, mask):
+    def on_process(self, heightmap, mask, terrain_size):
         gen_type = self.get_property("Type")
         op = self.get_property("Operation")
         strength = self.get_property("Strength")
@@ -183,7 +185,7 @@ class GeneratorEntity(Entity):
             offset = self.get_property("Height Offset")
             
             gen = PerlinNoiseGenerator(scale, octaves, pers, lac, seed, amp)
-            generated = gen.generate(heightmap.shape[0]) + offset
+            generated = gen.generate(heightmap.shape[0], terrain_size) + offset
             
         elif gen_type == "Constant":
             offset = self.get_property("Height Offset")
@@ -226,7 +228,7 @@ class FilterEntity(Entity):
         self.define_property("T-Iterations", int, 10, 1, 100)
         self.define_property("T-Strength", float, 0.5, 0.0, 1.0)
         
-    def on_process(self, heightmap, mask):
+    def on_process(self, heightmap, mask, terrain_size):
         f_type = self.get_property("Type")
         
         if f_type == "Erosion":
@@ -310,12 +312,12 @@ class MaskEntity(Entity):
         self.define_property("X", float, 0.0, -2048.0, 2048.0)
         self.define_property("Y", float, 0.0, -2048.0, 2048.0)
         
-    def process(self, heightmap, parent_mask=None):
+    def process(self, heightmap, parent_mask=None, terrain_size=1000.0):
         if not self.get_property("Enabled"):
             return
 
         # 1. Generate local mask
-        local_mask = self.generate_mask(heightmap.shape)
+        local_mask = self.generate_mask(heightmap.shape, terrain_size)
         
         if self.get_property("Invert"):
             local_mask = 1.0 - local_mask
@@ -327,9 +329,9 @@ class MaskEntity(Entity):
             
         # 3. Process children with this NEW mask
         for child in self._children:
-            child.process(heightmap, effective_mask)
+            child.process(heightmap, effective_mask, terrain_size)
             
-    def generate_mask(self, shape):
+    def generate_mask(self, shape, terrain_size):
         m_type = self.get_property("Type")
         h, w = shape
         mask = np.zeros(shape, dtype=np.float32)

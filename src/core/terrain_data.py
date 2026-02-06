@@ -2,7 +2,7 @@
 import numpy as np
 
 class TerrainData:
-    def __init__(self, size=1024, scale=1000.0):
+    def __init__(self, size=512, scale=1000.0):
         """
         Args:
             size: Resolution of heightmap (1024x1024 grid)
@@ -22,11 +22,11 @@ class TerrainData:
 
     def get_vertex_data(self):
         rows, cols = self.heightmap.shape
-        # X: -size/2 to size/2
-        # Z: -size/2 to size/2
+        # X: -scale/2 to scale/2
+        # Z: -scale/2 to scale/2
         
-        x = np.linspace(-self.size/2, self.size/2, cols)
-        z = np.linspace(-self.size/2, self.size/2, rows)
+        x = np.linspace(-self.scale/2, self.scale/2, cols)
+        z = np.linspace(-self.scale/2, self.scale/2, rows)
         xv, zv = np.meshgrid(x, z)
         
         # Stack vertices [xv, height, zv]
@@ -34,7 +34,7 @@ class TerrainData:
         
         # Calculate normals efficiently
         dy, dx = np.gradient(self.heightmap)
-        spacing = self.size / (rows - 1)
+        spacing = self.scale / (rows - 1)
         dx = dx / spacing
         dy = dy / spacing
         
@@ -79,12 +79,12 @@ class TerrainData:
         rows, cols = self.heightmap.shape
         
         # Convert world road points to grid coordinates
-        # World: -size/2 to size/2
+        # World: -scale/2 to scale/2
         # Grid: 0 to size-1
         
         def world_to_grid(wx, wz):
-            gx = (wx + self.size/2) / self.size * (cols - 1)
-            gz = (wz + self.size/2) / self.size * (rows - 1)
+            gx = (wx + self.scale/2) / self.scale * (cols - 1)
+            gz = (wz + self.scale/2) / self.scale * (rows - 1)
             return gx, gz
 
         # This is a very robust "brute force" approach for the prototype.
@@ -93,8 +93,8 @@ class TerrainData:
         
         # Let's do a mask-based approach. Create a mask of distance to road.
         
-        grid_x = np.linspace(-self.size/2, self.size/2, cols)
-        grid_z = np.linspace(-self.size/2, self.size/2, rows)
+        grid_x = np.linspace(-self.scale/2, self.scale/2, cols)
+        grid_z = np.linspace(-self.scale/2, self.scale/2, rows)
         gv_x, gv_z = np.meshgrid(grid_x, grid_z)
         
         # KDTree or Distance Transform is better, 

@@ -24,7 +24,25 @@ class InspectorPanel(QWidget):
         self.setLayout(self.main_layout)
 
     def set_entity(self, entity):
+        if self.current_entity:
+             try:
+                 self.current_entity.changed.disconnect(self.on_entity_changed)
+             except:
+                 pass
+        
         self.current_entity = entity
+        
+        if self.current_entity:
+            self.current_entity.changed.connect(self.on_entity_changed)
+            
+        self.build_ui()
+    
+    def on_entity_changed(self):
+        # When entity changes (externally or via Undo), refresh UI
+        # To avoid loops with internal changes, we could potentially block signals
+        # or check values. But build_ui clears everything.
+        # Ideally we just update values, but rebuilding is robust.
+        # Optimization: Check if focus is in one of our widgets?
         self.build_ui()
         
     def build_ui(self):
