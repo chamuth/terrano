@@ -12,6 +12,7 @@ from src.ui.viewport import TerrainViewport
 from src.ui.heightmap_viewport import HeightmapViewport
 from src.core.roads import RoadNetwork
 from src.ui.terrain_worker import TerrainWorker
+from src.ui.widgets.progress_indicator import QProgressIndicator
 
 class EditorWindow(QMainWindow):
     def __init__(self):
@@ -104,29 +105,15 @@ class EditorWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         
         self.status_label = QLabel("Ready")
-        self.status_bar.addWidget(self.status_label)
         
-        # Progress Bar next to label
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0) # Indeterminate
-        self.progress_bar.setFixedWidth(250)
-        self.progress_bar.setVisible(False)
+        # Custom Spinner
+        self.progress_indicator = QProgressIndicator()
+        self.progress_indicator.hide()
         
-        # Style it to be visible (Blue chunk)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #bbb;
-                border-radius: 3px;
-                text-align: center;
-                background-color: #f0f0f0;
-            }
-            QProgressBar::chunk {
-                background-color: #3daee9;
-                width: 20px;
-            }
-        """)
-        
-        self.status_bar.addWidget(self.progress_bar)
+        # Add to right side (Permanent widgets)
+        # Order: Spinner then Label (Left to Right)
+        self.status_bar.addPermanentWidget(self.progress_indicator)
+        self.status_bar.addPermanentWidget(self.status_label)
         
         # Set initial dock sizes
         self.dock_hierarchy.setMinimumWidth(300)
@@ -324,7 +311,7 @@ class EditorWindow(QMainWindow):
         
         # UI Feedback
         self.status_label.setText("Generating Terrain...")
-        self.progress_bar.setVisible(True)
+        self.progress_indicator.startAnimation()
         
         # Start new worker
         self.terrain_worker = TerrainWorker(self.root_terrain)
@@ -358,7 +345,7 @@ class EditorWindow(QMainWindow):
         
         # UI Feedback
         self.status_label.setText("Ready")
-        self.progress_bar.setVisible(False)
+        self.progress_indicator.stopAnimation()
 
     def closeEvent(self, event):
         # Save Session State
