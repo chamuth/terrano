@@ -16,7 +16,11 @@ class EditorWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Terrano Editor")
         self.resize(1600, 900)
-        self.setDockNestingEnabled(True)
+        # Enable Tabbed Docks (and keep nested/animated)
+        self.setDockOptions(self.dockOptions() | 
+                            QMainWindow.DockOption.AllowNestedDocks | 
+                            QMainWindow.DockOption.AllowTabbedDocks |
+                            QMainWindow.DockOption.AnimatedDocks)
         
         # Data Model
         self.root_terrain = TerrainEntity()
