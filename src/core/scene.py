@@ -307,7 +307,7 @@ class MaskEntity(Entity):
         self.define_property("Y", float, 0.0, -2048.0, 2048.0)
         
     def process(self, heightmap, parent_mask=None):
-        if not self._enabled:
+        if not self.get_property("Enabled"):
             return
 
         # 1. Generate local mask

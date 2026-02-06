@@ -4,6 +4,7 @@ import vispy.scene
 import vispy.scene.cameras
 from vispy.scene import visuals
 import vispy.visuals.transforms 
+from vispy.visuals.filters import ShadingFilter
 import numpy as np
 
 class TerrainViewport(QWidget):
@@ -69,7 +70,12 @@ class TerrainViewport(QWidget):
         
         # Terrain Mesh
         # Setting shading to smooth now that faces are fixed (Nx3)
-        self.mesh = visuals.Mesh(shading='smooth', color='gray', parent=self.view.scene)
+        # Terrain Mesh
+        # Setting shading to smooth now that faces are fixed (Nx3)
+        # We use a ShadingFilter to control light direction
+        self.light_dir = (-10, 10, -10) # Initial light direction (Top-Left)
+        self.shading_filter = ShadingFilter(shading='smooth', light_dir=self.light_dir)
+        self.mesh = visuals.Mesh(color='gray', parent=self.view.scene)
         
         # Road Visuals
         self.road_line = visuals.Line(pos=np.array([[0,0,0], [0,0,0]]), color='red', width=10, parent=self.view.scene, method='gl')
@@ -83,6 +89,11 @@ class TerrainViewport(QWidget):
         # Brush state
         self.is_painting = False
         self.is_panning = False
+        
+        # Brush state
+        self.is_painting = False
+        self.is_panning = False
+        self.is_rotating_light = False
         self.brush_position = None
         
         # Connect mouse events
@@ -98,6 +109,7 @@ class TerrainViewport(QWidget):
         self.last_pos = None
 
         self.update_mesh()
+        self.mesh.attach(self.shading_filter)
         
     def set_data(self, terrain_data):
         """Update the terrain data reference"""
@@ -181,6 +193,64 @@ class TerrainViewport(QWidget):
     def on_mouse_move(self, event):
         """Handle panning and brush cursor"""
         
+        # Light Rotation (Alt + Left Drag)
+        if self.is_rotating_light:
+            if self.last_pos is not None:
+                p1 = event.pos
+                p2 = self.last_pos
+                
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1] 
+                
+                # Sensitivity
+                angle_speed = 0.01
+                
+                # Current light dir
+                lx, ly, lz = self.light_dir
+                
+                # Convert to spherical coordinates
+                # Radius
+                r = np.sqrt(lx**2 + ly**2 + lz**2)
+                if r < 1e-6: r = 1.0
+                
+                # Azimuth (Angle in XZ plane) -> atan2(x, z)
+                azimuth = np.arctan2(lx, lz)
+                
+                # Elevation (Angle from XZ plane) -> asin(y / r)
+                # Clip to safe range
+                elevation = np.arcsin(np.clip(ly / r, -1.0, 1.0))
+                
+                # Update angles based on mouse delta
+                # Drag Right (dx > 0) -> Increase Azimuth (Rotate Right)
+                azimuth += dx * angle_speed
+                
+                # Drag Down (dy > 0) -> Decrease Elevation (Sun goes down)
+                # Drag Up (dy < 0) -> Increase Elevation (Sun goes up)
+                elevation -= dy * angle_speed
+                
+                # Clamp elevation to prevent flipping (keep between -85 and 85 degrees)
+                limit = np.radians(85)
+                elevation = np.clip(elevation, -limit, limit)
+                
+                # Convert back to Cartesian
+                # y = r * sin(elev)
+                # h = r * cos(elev)
+                # x = h * sin(azi)
+                # z = h * cos(azi)
+                
+                new_ly = r * np.sin(elevation)
+                h = r * np.cos(elevation)
+                new_lx = h * np.sin(azimuth)
+                new_lz = h * np.cos(azimuth)
+                
+                self.light_dir = (new_lx, new_ly, new_lz)
+                self.shading_filter.light_dir = self.light_dir[:3] 
+                self.canvas.update()
+
+            self.last_pos = event.pos
+            event.handled = True
+            return
+        
         # Panning Logic (Shift + Left Drag OR Middle Mouse Drag)
         if self.is_panning:
             if self.last_pos is not None:
@@ -232,6 +302,7 @@ class TerrainViewport(QWidget):
     def on_mouse_release(self, event):
         self.is_painting = False
         self.is_panning = False
+        self.is_rotating_light = False
         self.last_pos = None
 
     def on_mouse_press(self, event):
@@ -243,8 +314,16 @@ class TerrainViewport(QWidget):
             return
         
         if event.button == 1:
+
             # Block Shift+LMB (prevents default Vispy camera interaction moving the view)
             if 'Shift' in event.modifiers:
+                event.handled = True
+                return
+
+            # Light Rotation (Alt + LMB)
+            if 'Alt' in event.modifiers:
+                self.is_rotating_light = True
+                self.last_pos = event.pos
                 event.handled = True
                 return
 
