@@ -87,6 +87,16 @@ class HierarchyPanel(QWidget):
         self.items_map[entity.id] = item
         self.entity_lookup[entity.id] = entity
         
+        # Connect to changes
+        # Connect to changes
+        try:
+            entity.changed.disconnect(self.on_entity_changed)
+            entity.renamed.disconnect(self.on_entity_renamed)
+        except:
+            pass
+        entity.changed.connect(self.on_entity_changed)
+        entity.renamed.connect(self.on_entity_renamed)
+        
         parent_item.addChild(item)
         
         # Apply initial visual state
@@ -114,6 +124,27 @@ class HierarchyPanel(QWidget):
         entity = self.get_entity_from_item(item)
         self.update_ui_state()
         pass
+
+    def on_entity_changed(self):
+        """Called when properties change (enabled/params)"""
+        entity = self.sender()
+        if not entity: return
+        
+        if entity.id in self.items_map:
+            item = self.items_map[entity.id]
+            # Update Style (Enabled/Disabled)
+            self.update_item_style(item, entity)
+            
+    def on_entity_renamed(self):
+        """Called when name changes"""
+        entity = self.sender()
+        if not entity: return
+        
+        if entity.id in self.items_map:
+            item = self.items_map[entity.id]
+            # Update Text
+            if item.text(0) != entity.name:
+                item.setText(0, entity.name)
 
     def can_accept_child(self, parent_entity, child_type):
         """

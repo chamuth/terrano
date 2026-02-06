@@ -1,0 +1,56 @@
+
+from PyQt6.QtWidgets import QWidget, QVBoxLayout
+import vispy.scene
+from vispy.scene import visuals
+import numpy as np
+
+class HeightmapViewport(QWidget):
+    def __init__(self, terrain_data, road_network=None, parent=None):
+        super().__init__(parent)
+        self.terrain_data = terrain_data
+        
+        # Vispy Canvas
+        self.canvas = vispy.scene.SceneCanvas(keys='interactive', show=True, parent=self)
+        self.view = self.canvas.central_widget.add_view()
+        
+        # 2D Camera
+        self.view.camera = vispy.scene.cameras.PanZoomCamera(aspect=1)
+        self.view.camera.set_range(x=(-50, 1050), y=(-50, 1050))
+        
+        # Layout
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.canvas.native)
+        self.setLayout(self.layout)
+        
+        # Image Visual
+        # Interpolation: 'nearest' works well for heightmap pixel inspection, 'cubic' for smooth look
+        self.image = visuals.Image(parent=self.view.scene, method='auto', interpolation='nearest', cmap='grays')
+        
+        self.update_image()
+    
+    def set_data(self, terrain_data):
+        self.terrain_data = terrain_data
+        self.update_image()
+        
+    def update_image(self):
+        # Vispy Image expects (H, W) or (H, W, 3/4)
+        # TerrainData is (N, 3), we need to maintain a 2D grid representation
+        # Assuming TerrainData might have raw buffer or we reshape
+        
+        # Check if terrain_data exposes a 2D grid directly
+        if hasattr(self.terrain_data, 'heightmap'):
+            # It's a 2D array of floats
+            data = self.terrain_data.heightmap
+            
+            # Normalize for visualization if needed, or rely on clim
+            # Vispy image handles float data, but cmap needs range
+            
+            # Rotate/Flip to match 3D view orientation (X/Z)
+            # Usually heightmap[x, z] or [row, col]
+            # Standard: Image (0,0) is top-left.
+            # Terrain (0,0) is usually corner.
+            
+            self.image.set_data(data)
+            self.image.clim = (-50, 150) # Approx range, ideally dynamic
+            
+        self.canvas.update()

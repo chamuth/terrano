@@ -7,6 +7,7 @@ from src.core.terrain_data import TerrainData
 from src.ui.panels.hierarchy import HierarchyPanel
 from src.ui.panels.inspector import InspectorPanel
 from src.ui.viewport import TerrainViewport
+from src.ui.heightmap_viewport import HeightmapViewport
 from src.core.roads import RoadNetwork
 from src.ui.terrain_worker import TerrainWorker
 
@@ -49,9 +50,27 @@ class EditorWindow(QMainWindow):
         self.reprocess_terrain()
     
     def init_ui(self):
-        # 1. Viewport (Central)
-        self.viewport = TerrainViewport(self.render_data, self.road_net)
-        self.setCentralWidget(self.viewport)
+        # 1. Dock Viewports (No Central Widget)
+        self.setCentralWidget(QWidget()) # Dummy central widget, or None if allowing docks to fill
+        # Ideally, we want Docks to take up space. 
+        # Using a dummy central widget with 0 size often helps QMainWindow logic.
+        self.centralWidget().hide() # Hide it so docks fill space
+        self.setDockNestingEnabled(True)
+
+        # 3D Viewport Dock
+        self.dock_viewport_3d = QDockWidget("3D Scene", self)
+        self.viewport_3d = TerrainViewport(self.render_data, self.road_net)
+        self.dock_viewport_3d.setWidget(self.viewport_3d)
+        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_3d)
+        
+        # 2D Viewport Dock
+        self.dock_viewport_2d = QDockWidget("2D Heightmap", self)
+        self.viewport_2d = HeightmapViewport(self.render_data)
+        self.dock_viewport_2d.setWidget(self.viewport_2d)
+        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_2d)
+        
+        # Split them side-by-side
+        self.splitDockWidget(self.dock_viewport_3d, self.dock_viewport_2d, Qt.Orientation.Horizontal)
         
         # 2. Hierarchy (Dock Left)
         self.dock_hierarchy = QDockWidget("Component Browser", self)
@@ -158,16 +177,17 @@ class EditorWindow(QMainWindow):
             self.render_data = TerrainData(size=new_size, scale=current_scale)
             
             # Update viewport reference
-            if hasattr(self.viewport, 'set_data'):
-                self.viewport.set_data(self.render_data)
-            else:
-                self.viewport.terrain_data = self.render_data
+            if hasattr(self.viewport_3d, 'set_data'):
+                self.viewport_3d.set_data(self.render_data)
+                
+            self.viewport_2d.set_data(self.render_data)
 
         # Update render data content
         self.render_data.heightmap[:] = heightmap
         
-        # Update viewport mesh
-        self.viewport.update_mesh()
+        # Update viewports
+        self.viewport_3d.update_mesh()
+        self.viewport_2d.update_image()
         
         # UI Feedback
         self.status_label.setText("Ready")

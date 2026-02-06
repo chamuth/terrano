@@ -12,6 +12,7 @@ class EntityType(Enum):
 class Entity(QObject):
     # Signal when properties change so Inspector/Viewport can update
     changed = pyqtSignal()
+    renamed = pyqtSignal() # Signal specifically for renaming (no recompute needed)
     structure_changed = pyqtSignal() # When children are added/removed
 
     def __init__(self, name="Entity", parent=None, entity_type=EntityType.ROOT):
@@ -42,7 +43,7 @@ class Entity(QObject):
     @name.setter
     def name(self, value):
         self._name = value
-        self.changed.emit()
+        self.renamed.emit()
 
     def set_parent(self, parent):
         if self._parent == parent:

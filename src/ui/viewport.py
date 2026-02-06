@@ -15,8 +15,22 @@ class TerrainViewport(QWidget):
         self.on_click_callback = on_click_callback
         self.on_paint_callback = on_paint_callback
         
+        
+        # Layout
+        self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(self.layout)
+        
         # Vispy Canvas
-        self.canvas = vispy.scene.SceneCanvas(keys='interactive', show=True, parent=self)
+        # IMPORTANT: Do not set parent=self here immediately if we want to add to layout manually.
+        # But SceneCanvas auto-creates a backend widget.
+        # Recommended pattern for embedding:
+        self.canvas = vispy.scene.SceneCanvas(keys='interactive', show=False, parent=None)
+        
+        # Add native widget to layout
+        self.layout.addWidget(self.canvas.native)
+        self.canvas.native.setParent(self)
+        
         self.view = self.canvas.central_widget.add_view()
         
         # Camera Setup (Y-up for XZ terrain, 45-degree top-down view)
@@ -58,9 +72,11 @@ class TerrainViewport(QWidget):
         # Events
         self.canvas.events.mouse_press.connect(self.on_mouse_press)
         
-        self.layout = QVBoxLayout()
-        self.layout.addWidget(self.canvas.native)
-        self.setLayout(self.layout)
+        
+        # Layout is already set
+        # self.layout = QVBoxLayout()
+        # self.layout.addWidget(self.canvas.native)
+        # self.setLayout(self.layout)
         
         # Visuals
         # Custom fading grid (1km terrain, 100m spacing, fades at 2km)
@@ -118,27 +134,35 @@ class TerrainViewport(QWidget):
 
     def on_resize(self, event):
         """Handle layout and overlay positioning"""
-        w, h = event.size
-        
-        # 1. Update Layout
-        # We do NOT set central_widget.max_size as it crashes (widget is frozen)
-        # self.canvas.central_widget.max_size = (w, h)
-        
-        # 2. Position Gizmo Overlay (Top-Right)
-        gizmo_size = 150
-        padding = 0
-        
-        # Set pos/size of the ViewBox widget directly
-        self.gizmo_view.pos = (w - gizmo_size - padding, h - gizmo_size - padding)
-        self.gizmo_view.size = (gizmo_size, gizmo_size)
+        try:
+            w, h = event.size
+            if w <= 0 or h <= 0: return
+            
+            # 1. Update Layout
+            # We do NOT set central_widget.max_size as it crashes (widget is frozen)
+            # self.canvas.central_widget.max_size = (w, h)
+            
+            # 2. Position Gizmo Overlay (Top-Right)
+            gizmo_size = 150
+            padding = 0
+            
+            # Set pos/size of the ViewBox widget directly
+            self.gizmo_view.pos = (w - gizmo_size - padding, h - gizmo_size - padding)
+            self.gizmo_view.size = (gizmo_size, gizmo_size)
+        except Exception as e:
+            # Swallow resize errors during docking transitions
+            pass
 
     def on_draw(self, event):
         """Sync gizmo camera rotation with main camera"""
-        if hasattr(self.view.camera, 'azimuth'):
-            # Directly copy rotation parameters
-            self.gizmo_view.camera.azimuth = self.view.camera.azimuth
-            self.gizmo_view.camera.elevation = self.view.camera.elevation
-            self.gizmo_view.camera.roll = self.view.camera.roll
+        try:
+            if hasattr(self.view.camera, 'azimuth'):
+                # Directly copy rotation parameters
+                self.gizmo_view.camera.azimuth = self.view.camera.azimuth
+                self.gizmo_view.camera.elevation = self.view.camera.elevation
+                self.gizmo_view.camera.roll = self.view.camera.roll
+        except:
+            pass
 
     def create_brush_cursor(self):
         """Create a circular cursor for the brush"""
