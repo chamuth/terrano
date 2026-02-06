@@ -82,6 +82,13 @@ class HierarchyPanel(QWidget):
         # Update UI state (toolbar)
         self.update_ui_state()
 
+    def set_root(self, root_entity):
+        """Replace the root entity and refresh"""
+        self.root_entity = root_entity
+        # Reconnect signals
+        self.root_entity.structure_changed.connect(self.refresh_tree)
+        self.refresh_tree()
+
     def add_node(self, entity, parent_item):
         item = QTreeWidgetItem([entity.name])
         # STORE ID STRING INSTEAD OF OBJECT to fix QVariant warning

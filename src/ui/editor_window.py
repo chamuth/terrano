@@ -12,7 +12,10 @@ from src.ui.viewport import TerrainViewport
 from src.ui.heightmap_viewport import HeightmapViewport
 from src.core.roads import RoadNetwork
 from src.ui.terrain_worker import TerrainWorker
+from src.ui.terrain_worker import TerrainWorker
 from src.ui.widgets.progress_indicator import QProgressIndicator
+from src.core.project import ProjectManager
+from PyQt6.QtWidgets import QFileDialog
 
 class EditorWindow(QMainWindow):
     def __init__(self):
@@ -33,6 +36,9 @@ class EditorWindow(QMainWindow):
         # We also need the raw TerrainData for the Viewport to render
         self.render_data = TerrainData(size=512)
         self.road_net = RoadNetwork()
+        
+        # Project Management
+        self.project_manager = ProjectManager()
         
         # Undo Stack
         self.undo_stack = QUndoStack(self)
@@ -58,7 +64,19 @@ class EditorWindow(QMainWindow):
         # But we also need to catch additions/removals if they happen elsewhere?
         # For now, HierarchyPanel actions trigger root.structure_changed.
         self.root_terrain.structure_changed.connect(self.schedule_update)
+        # Also mark project as dirty when structure changes
+        self.root_terrain.structure_changed.connect(self.mark_dirty)
+        
         self.root_terrain.changed.connect(self.schedule_update)
+        # Also mark dirty on property changes
+        self.root_terrain.changed.connect(self.mark_dirty)
+        
+        # Also need to listen to undo stack for changes?
+        # Undo/Redo modifies scene -> triggers signals -> marks dirty.
+        # But we could also just mark dirty on any undo stack change if simpler.
+        # Actually signals are safer.
+        
+        self.update_title()
         
         # Connect mesh stats
         self.viewport_3d.mesh_stats_changed.connect(self.update_mesh_stats)
@@ -180,6 +198,34 @@ class EditorWindow(QMainWindow):
         
         # -- File Menu --
         file_menu = menu_bar.addMenu("&File")
+        
+        new_action = QAction("&New Project", self)
+        new_action.setShortcut("Ctrl+N")
+        new_action.triggered.connect(self.new_project)
+        file_menu.addAction(new_action)
+        
+        open_action = QAction("&Open Project...", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self.open_project_dialog)
+        file_menu.addAction(open_action)
+        
+        save_action = QAction("&Save", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_action)
+        
+        save_as_action = QAction("Save &As...", self)
+        save_as_action.setShortcut("Ctrl+Shift+S")
+        save_as_action.triggered.connect(self.save_project_as)
+        file_menu.addAction(save_as_action)
+        
+        file_menu.addSeparator()
+        
+        self.recent_menu = file_menu.addMenu("Open &Recent")
+        self.update_recent_menu()
+        
+        file_menu.addSeparator()
+        
         exit_action = QAction("E&xit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
@@ -411,10 +457,197 @@ class EditorWindow(QMainWindow):
             self.initial_fit_done = True
 
     def closeEvent(self, event):
+        if not self.check_unsaved_changes():
+            event.ignore()
+            return
+            
         # Save Session State
         self.settings.setValue("window/state", self.saveState())
         self.settings.setValue("window/geometry", self.saveGeometry())
         event.accept()
+
+    # --- Project Management Slots ---
+    
+    def update_title(self):
+        dirty = "*" if self.project_manager.is_dirty else ""
+        self.setWindowTitle(f"{self.project_manager.project_name}{dirty} - Terrano")
+        
+    def mark_dirty(self):
+        if not self.project_manager.is_dirty:
+            self.project_manager.is_dirty = True
+            self.update_title()
+            
+    def check_unsaved_changes(self):
+        if self.project_manager.is_dirty:
+            reply = QMessageBox.question(self, "Unsaved Changes", 
+                                         "You have unsaved changes. Save before continuing?",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+            if reply == QMessageBox.StandardButton.Cancel:
+                return False
+            elif reply == QMessageBox.StandardButton.Yes:
+                return self.save_project()
+        return True
+
+    def new_project(self):
+        if not self.check_unsaved_changes(): return
+        
+        self.project_manager.new_project()
+        
+        # Reset Scene
+        self.root_terrain = TerrainEntity()
+        self.reload_scene(self.root_terrain)
+        self.undo_stack.clear()
+        
+        self.update_title()
+        self.status_label.setText("New project created.")
+
+    def save_project(self):
+        if not self.project_manager.current_project_path:
+            return self.save_project_as()
+            
+        success, msg = self.project_manager.save_project(self.root_terrain, self.project_manager.current_project_path)
+        if success:
+             self.add_recent_project(self.project_manager.current_project_path)
+             
+        self.status_label.setText(msg)
+        self.update_title()
+        return success
+
+    def save_project_as(self):
+        # Prompt for FOLDER
+        folder = QFileDialog.getExistingDirectory(self, "Select Project Folder")
+        if not folder: return False
+        
+        success, msg = self.project_manager.save_project(self.root_terrain, folder)
+        if success:
+             # Folder is project path? Project manager saves a file. 
+             # Wait, save_project ensures correct path in project_manager if successful.
+             # but we need the exact file path.
+             # Actually, project_manager tracks `current_project_path` as FOLDER.
+             # So we construct path:
+             project_name = self.project_manager.project_name
+             import os
+             fpath = os.path.join(folder, f"{project_name}.terrano")
+             self.add_recent_project(fpath)
+             
+        self.status_label.setText(msg)
+        self.update_title()
+        return success
+
+    def open_project_dialog(self):
+        if not self.check_unsaved_changes(): return
+        
+        # Select JSON file
+        # Filter: JSON files
+        fpath, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Terrano Project (*.terrano)")
+        if not fpath: return
+        
+        root, msg = self.project_manager.load_project(fpath)
+        if root:
+            self.reload_scene(root)
+            self.undo_stack.clear()
+            self.update_title()
+            self.status_label.setText(msg)
+            self.add_recent_project(fpath)
+        else:
+            QMessageBox.critical(self, "Error", msg)
+            
+    def reload_scene(self, new_root):
+        """Apply new root entity to the application state"""
+        self.root_terrain = new_root
+        
+        # Reconnect Global Signals
+        try:
+             # Disconnect old if possible? Reference is lost anyway, but signals?
+             pass
+        except: pass
+        
+        # Connect new
+        self.root_terrain.structure_changed.connect(self.schedule_update)
+        self.root_terrain.structure_changed.connect(self.mark_dirty)
+        self.root_terrain.changed.connect(self.schedule_update)
+        self.root_terrain.changed.connect(self.mark_dirty)
+        
+        # Update Panels
+        self.hierarchy.set_root(self.root_terrain)
+        self.inspector.set_entity(None) # Deselect
+        
+        # Reset Render Data
+        # Read from new root properties
+        size = self.root_terrain.get_property("Resolution")
+        scale = self.root_terrain.get_property("Size")
+        try:
+            sz = int(size)
+        except: sz = 512
+        if not scale: scale = 1000.0
+        
+        self.render_data = TerrainData(size=sz, scale=scale)
+        self.viewport_3d.set_data(self.render_data)
+        self.viewport_2d.set_data(self.render_data)
+        
+        # Trigger Generation
+        self.reprocess_terrain()
+        
+        # Reset View (Feature request from before)
+        self.fit_to_view()
+
+    def add_recent_project(self, path):
+        recents = self.settings.value("recent_projects", [], type=list)
+        if not isinstance(recents, list): recents = []
+        
+        # Remove if exists to move to top
+        if path in recents:
+            recents.remove(path)
+            
+        recents.insert(0, path)
+        
+        # Limit to 10
+        if len(recents) > 10:
+            recents = recents[:10]
+            
+        self.settings.setValue("recent_projects", recents)
+        self.update_recent_menu()
+        
+    def update_recent_menu(self):
+        self.recent_menu.clear()
+        recents = self.settings.value("recent_projects", [], type=list)
+        if not isinstance(recents, list): recents = []
+        
+        if not recents:
+            action = QAction("No Recent Files", self)
+            action.setEnabled(False)
+            self.recent_menu.addAction(action)
+            return
+            
+        for path in recents:
+             action = QAction(path, self)
+             action.triggered.connect(lambda checked, p=path: self.open_recent_project(p))
+             self.recent_menu.addAction(action)
+             
+        self.recent_menu.addSeparator()
+        clear_action = QAction("Clear Recent List", self)
+        clear_action.triggered.connect(self.clear_recent_projects)
+        self.recent_menu.addAction(clear_action)
+
+    def clear_recent_projects(self):
+        self.settings.setValue("recent_projects", [])
+        self.update_recent_menu()
+
+    def open_recent_project(self, path):
+        if not self.check_unsaved_changes(): return
+        
+        root, msg = self.project_manager.load_project(path)
+        if root:
+            self.reload_scene(root)
+            self.undo_stack.clear()
+            self.update_title()
+            self.status_label.setText(msg)
+            # Move to top again
+            self.add_recent_project(path)
+        else:
+            QMessageBox.critical(self, "Error", msg)
+            # Optionally remove from list if not found
+            # self.remove_recent(path)
 
 class ManageLayoutsDialog(QDialog):
     def __init__(self, settings, parent=None):
