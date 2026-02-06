@@ -3,15 +3,19 @@ from PyQt6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QMenu, QWidget, QVBox
 from PyQt6.QtGui import QAction, QIcon, QBrush
 from PyQt6.QtCore import Qt
 from src.core.scene import TerrainEntity, FilterEntity, MaskEntity, GeneratorEntity, EntityType
-
+from src.core.commands import AddEntityCommand, RemoveEntityCommand, MoveEntityCommand, RenameEntityCommand
 
 class HierarchyPanel(QWidget):
-    def __init__(self, root_entity, parent=None):
+    def __init__(self, root_entity, undo_stack, parent=None):
         super().__init__(parent)
         self.root_entity = root_entity
+        self.undo_stack = undo_stack
         self.items_map = {} # Map Entity.id -> Item
         self.id_map = {} # Map Item -> Entity.id (Reverse lookup helper, or store in UserRole as string)
         self.entity_lookup = {} # Map Entity.id -> Entity Object (for retrieval)
+        
+        # Auto-refresh on structure change (Undo/Redo support)
+        self.root_entity.structure_changed.connect(self.refresh_tree)
 
         self.layout = QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -206,23 +210,88 @@ class HierarchyPanel(QWidget):
         QTreeWidget.dragMoveEvent(self.tree, event)
 
     def on_drop_event(self, event):
-        # 1. Get Source and Destination
+        # Validate drop target
+        # QTreeWidget drop behavior is complex. We want to intercept it and use our Command.
+        
+        # 1. Determine Target and Action
+        # This is tricky because QTreeWidget handles the drop internally if we call super().
+        # If we don't call super(), we have to calculate everything.
+        
+        # Strategy: Let QTreeWidget do the move VISUALLY? No, that bypasses Undo stack.
+        # We must ignore super().dropEvent and calculate intent.
+        
         target_item = self.tree.itemAt(event.position().toPoint())
+        drop_indicator = self.tree.dropIndicatorPosition() 
+        # OnItem, AboveItem, BelowItem, OnViewport
         
-        # Note: QTreeWidget drop behavior is complex (can be child or sibling).
-        # We will let QTreeWidget perform the visual move first.
-        # THEN we verify the structure. If invalid, we REVERT (refresh tree).
+        if not target_item:
+            event.ignore()
+            return
+
+        target_ent = self.get_entity_from_item(target_item)
         
-        QTreeWidget.dropEvent(self.tree, event)
+        # Get Source
+        source_items = self.tree.selectedItems()
+        if not source_items: return
+        source_ent = self.get_entity_from_item(source_items[0])
         
-        # Sync and Validate
-        valid = self.sync_hierarchy_from_visuals()
+        if not source_ent or not target_ent: return
+        if source_ent == target_ent: return
         
-        if not valid:
-            print("Invalid Move Reverted")
-            self.refresh_tree()
+        new_parent = None
+        new_index = -1 # Append
+        
+        if drop_indicator == QAbstractItemView.DropIndicatorPosition.OnItem:
+            # Reparenting to Target
+            if self.can_accept_child(target_ent, source_ent.entity_type):
+                new_parent = target_ent
+                new_index = len(target_ent.get_children())
+            else:
+                event.ignore()
+                return
+                
+        elif drop_indicator == QAbstractItemView.DropIndicatorPosition.AboveItem:
+            # Sibling - Insert Before
+            new_parent = target_ent._parent
+            if new_parent:
+                try:
+                    idx = new_parent.get_children().index(target_ent)
+                    new_index = idx
+                except:
+                    new_index = 0
+            else:
+                 # Reordering roots? Not supported yet as root is fixed
+                 event.ignore()
+                 return
+                 
+        elif drop_indicator == QAbstractItemView.DropIndicatorPosition.BelowItem:
+            # Sibling - Insert After
+            new_parent = target_ent._parent
+            if new_parent:
+                 try:
+                    idx = new_parent.get_children().index(target_ent)
+                    new_index = idx + 1
+                 except:
+                    new_index = -1
+            else:
+                 event.ignore()
+                 return
+                 
+        elif drop_indicator == QAbstractItemView.DropIndicatorPosition.OnViewport:
+             # Reparent to Root?
+             # If source is not already root child
+             new_parent = self.root_entity
+             new_index = len(self.root_entity.get_children())
+
+        # Final Validation
+        if new_parent and self.can_accept_child(new_parent, source_ent.entity_type):
+             # Execute Command
+             cmd = MoveEntityCommand(source_ent, new_parent, new_index)
+             self.undo_stack.push(cmd)
+             # Tree refresh happens via signal
+             event.accept()
         else:
-            self.root_entity.structure_changed.emit()
+             event.ignore()
 
     def sync_hierarchy_from_visuals(self):
         # Rebuild hierarchy from visual tree
@@ -310,9 +379,21 @@ class HierarchyPanel(QWidget):
             
         new_ent = self.create_entity(e_type)
         if new_ent:
-            new_ent.set_parent(parent)
+            # PUSH TO UNDO STACK
+            cmd = AddEntityCommand(parent, new_ent)
+            self.undo_stack.push(cmd)
+            # The command execution will trigger structure_changed -> main window update
+            # We also listen to structure_changed? No, the tree refresh usually happens manually
+            # But the Command's signal emission should ideally trigger refresh.
+            # Currently HierarchyPanel.refresh_tree is called explicitly.
+            # BETTER: Connect structure_changed to refresh_tree permanently?
+            # For now: We manually refresh here or let the command do it?
+            # Command emits signal. Signal handled in EditorWindow -> calls schedule_update.
+            # Does schedule_update refresh tree? No.
+            # We should probably force refresh here or connect it.
+            # But wait! If we undo, how do we refresh?
+            # The signal must drive the refresh.
             self.refresh_tree()
-            self.root_entity.structure_changed.emit()
 
     def create_entity(self, e_type):
         if e_type == EntityType.GENERATOR:
@@ -359,15 +440,15 @@ class HierarchyPanel(QWidget):
         
         elif action == del_action:
             if entity != self.root_entity:
-                entity.set_parent(None)
+                cmd = RemoveEntityCommand(entity)
+                self.undo_stack.push(cmd)
                 self.refresh_tree()
-                self.root_entity.structure_changed.emit()
 
     def safe_add(self, parent, e_type):
         new_ent = self.create_entity(e_type)
-        new_ent.set_parent(parent)
+        cmd = AddEntityCommand(parent, new_ent)
+        self.undo_stack.push(cmd)
         self.refresh_tree()
-        self.root_entity.structure_changed.emit()
 
     def add_entity_descendant(self, parent, e_type):
         self.safe_add(parent, e_type)

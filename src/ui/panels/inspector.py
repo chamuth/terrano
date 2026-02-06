@@ -2,10 +2,12 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit, QSpinBox, 
                              QDoubleSpinBox, QCheckBox, QLabel, QScrollArea)
 from PyQt6.QtCore import Qt
+from src.core.commands import PropertyChangeCommand, RenameEntityCommand
 
 class InspectorPanel(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, undo_stack, parent=None):
         super().__init__(parent)
+        self.undo_stack = undo_stack
         self.current_entity = None
         
         self.main_layout = QVBoxLayout()
@@ -38,8 +40,10 @@ class InspectorPanel(QWidget):
             
         # Name
         name_edit = QLineEdit(self.current_entity.name)
-        name_edit.textChanged.connect(lambda val: setattr(self.current_entity, 'name', val))
+        # Use editingFinished to avoid spamming undo stack on every character
+        name_edit.editingFinished.connect(lambda: self.push_rename(name_edit.text()))
         self.form_layout.addRow("Name", name_edit)
+        
         
         # Properties
         for prop_name, prop_data in self.current_entity.properties.items():
@@ -103,10 +107,21 @@ class InspectorPanel(QWidget):
             except:
                 pass
 
-            self.current_entity.set_property(name, value)
+            # self.current_entity.set_property(name, value)
+            
+            # Undo Logic
+            old_val = self.current_entity.get_property(name)
+            if old_val != value:
+                cmd = PropertyChangeCommand(self.current_entity, name, value)
+                self.undo_stack.push(cmd)
             
             # If the property change affects the structure or available properties (like Type change),
             # we might need to rebuild UI.
             # Simple heuristic: rebuild if "Type" changed
             if name == "Type":
                 self.build_ui()
+
+    def push_rename(self, new_name):
+        if self.current_entity and self.current_entity.name != new_name:
+            cmd = RenameEntityCommand(self.current_entity, new_name)
+            self.undo_stack.push(cmd)

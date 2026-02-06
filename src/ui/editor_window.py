@@ -1,6 +1,8 @@
 import sys
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QDockWidget, QStatusBar, QLabel, QProgressBar, QWidget)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QDockWidget, QStatusBar, QLabel, QProgressBar, QWidget,
+                             QMenuBar, QMenu, QInputDialog, QMessageBox, QDialog, QListWidget, QDialogButtonBox, QVBoxLayout, QPushButton)
+from PyQt6.QtCore import Qt, QTimer, QSettings
+from PyQt6.QtGui import QAction, QUndoStack, QKeySequence
 
 from src.core.scene import TerrainEntity
 from src.core.terrain_data import TerrainData
@@ -14,13 +16,15 @@ from src.ui.terrain_worker import TerrainWorker
 class EditorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Terrano Editor")
-        self.resize(1600, 900)
+        self.setWindowTitle("Terrano")
+        self.resize(1920, 900)
         # Enable Tabbed Docks (and keep nested/animated)
         self.setDockOptions(self.dockOptions() | 
                             QMainWindow.DockOption.AllowNestedDocks | 
                             QMainWindow.DockOption.AllowTabbedDocks |
                             QMainWindow.DockOption.AnimatedDocks)
+        # Data Persistence
+        self.settings = QSettings("SleekSoft", "TerranoEditor")
         
         # Data Model
         self.root_terrain = TerrainEntity()
@@ -28,6 +32,9 @@ class EditorWindow(QMainWindow):
         # We also need the raw TerrainData for the Viewport to render
         self.render_data = TerrainData(size=1024)
         self.road_net = RoadNetwork()
+        
+        # Undo Stack
+        self.undo_stack = QUndoStack(self)
         
         # Threading
         self.terrain_worker = None
@@ -63,12 +70,14 @@ class EditorWindow(QMainWindow):
 
         # 3D Viewport Dock
         self.dock_viewport_3d = QDockWidget("3D Scene", self)
+        self.dock_viewport_3d.setObjectName("Viewport3D")
         self.viewport_3d = TerrainViewport(self.render_data, self.road_net)
         self.dock_viewport_3d.setWidget(self.viewport_3d)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_3d)
         
         # 2D Viewport Dock
         self.dock_viewport_2d = QDockWidget("2D Heightmap", self)
+        self.dock_viewport_2d.setObjectName("Viewport2D")
         self.viewport_2d = HeightmapViewport(self.render_data)
         self.dock_viewport_2d.setWidget(self.viewport_2d)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_2d)
@@ -78,13 +87,15 @@ class EditorWindow(QMainWindow):
         
         # 2. Hierarchy (Dock Left)
         self.dock_hierarchy = QDockWidget("Component Browser", self)
-        self.hierarchy = HierarchyPanel(self.root_terrain)
+        self.dock_hierarchy.setObjectName("Hierarchy")
+        self.hierarchy = HierarchyPanel(self.root_terrain, self.undo_stack)
         self.dock_hierarchy.setWidget(self.hierarchy)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_hierarchy)
         
         # 3. Inspector (Dock Right)
         self.dock_inspector = QDockWidget("Properties", self)
-        self.inspector = InspectorPanel()
+        self.dock_inspector.setObjectName("Inspector")
+        self.inspector = InspectorPanel(self.undo_stack)
         self.dock_inspector.setWidget(self.inspector)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_inspector)
         
@@ -121,7 +132,159 @@ class EditorWindow(QMainWindow):
         self.dock_hierarchy.setMinimumWidth(300)
         self.dock_inspector.setMinimumWidth(350)
 
-    # ... on_selection_changed, schedule_update ...
+        # 5. Menu Bar
+        self.create_menu_bar()
+
+        # 6. Restore Session
+        state = self.settings.value("window/state")
+        geom = self.settings.value("window/geometry")
+        if state and geom:
+            self.restoreState(state)
+            self.restoreGeometry(geom)
+
+    def create_menu_bar(self):
+        menu_bar = self.menuBar()
+        # Reduce padding to resemble standard Windows desktop apps (compact)
+        menu_bar.setStyleSheet("""
+            QMenuBar {
+                background-color: #303030;
+                color: #e0e0e0;
+                border-bottom: 1px solid #404040;
+            }
+            QMenuBar::item {
+                spacing: 3px; 
+                padding: 4px 8px;
+                background: transparent;
+                border-radius: 4px;
+            }
+            QMenuBar::item:selected { 
+                background-color: #454545;
+            }
+            QMenu {
+                background-color: #303030;
+                color: #e0e0e0;
+                border: 1px solid #505050;
+            }
+            QMenu::item {
+                padding: 4px 20px 4px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #3daee9;
+                color: #ffffff;
+            }
+        """)
+        
+        # -- File Menu --
+        file_menu = menu_bar.addMenu("&File")
+        exit_action = QAction("E&xit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # -- Edit Menu --
+        edit_menu = menu_bar.addMenu("&Edit")
+        
+        undo_action = self.undo_stack.createUndoAction(self, "&Undo")
+        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        edit_menu.addAction(undo_action)
+        
+        redo_action = self.undo_stack.createRedoAction(self, "&Redo")
+        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        edit_menu.addAction(redo_action)
+        
+        edit_menu.addSeparator()
+        edit_menu.addAction(QAction("Preferences...", self, enabled=False))
+        
+        # -- Window Menu --
+        self.window_menu = menu_bar.addMenu("&Window")
+        self.update_window_menu()
+        self.window_menu.aboutToShow.connect(self.update_window_menu)
+        
+        # -- Help Menu --
+        help_menu = menu_bar.addMenu("&Help")
+        about_action = QAction("&About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+    def update_window_menu(self):
+        self.window_menu.clear()
+        
+        # 1. Dock Visibility Toggles
+        docks = [self.dock_viewport_3d, self.dock_viewport_2d, self.dock_hierarchy, self.dock_inspector]
+        for dock in docks:
+            action = dock.toggleViewAction()
+            self.window_menu.addAction(action)
+            
+        self.window_menu.addSeparator()
+        
+        # 2. Layout Management Actions
+        save_layout_action = QAction("Save Layout As...", self)
+        save_layout_action.triggered.connect(self.save_layout_dialog)
+        self.window_menu.addAction(save_layout_action)
+        
+        manage_action = QAction("Manage Layouts...", self)
+        manage_action.triggered.connect(self.manage_layouts_dialog)
+        self.window_menu.addAction(manage_action)
+        
+        self.window_menu.addSeparator()
+        self.window_menu.addAction(QAction("Switch Layout:", self, enabled=False))
+        
+        # 3. List Existing Layouts
+        layouts = self.settings.value("layouts/list", [], type=list)
+        # Ensure it's a list (QSettings can return different types if empty)
+        if not isinstance(layouts, list): layouts = []
+        
+        for name in layouts:
+            # We use a closure or partial to capture 'name'
+            action = QAction(name, self)
+            action.triggered.connect(lambda checked, n=name: self.load_layout(n))
+            self.window_menu.addAction(action)
+
+        # Add Default Reset
+        self.window_menu.addSeparator()
+        reset_action = QAction("Reset to Default", self)
+        # We don't have a hardcoded default restore yet, but we could implement one.
+        # For now, maybe just "Restore Last Saved" logic? 
+        # Or better, just let users save their own.
+        
+    def save_layout_dialog(self):
+        name, ok = QInputDialog.getText(self, "Save Layout", "Layout Name:")
+        if ok and name:
+            self.save_layout(name)
+            
+    def save_layout(self, name):
+        # 1. Update List
+        layouts = self.settings.value("layouts/list", [], type=list)
+        if not isinstance(layouts, list): layouts = []
+        
+        if name not in layouts:
+            layouts.append(name)
+            self.settings.setValue("layouts/list", layouts)
+            
+        # 2. Save State
+        self.settings.setValue(f"layouts/{name}/state", self.saveState())
+        self.settings.setValue(f"layouts/{name}/geometry", self.saveGeometry())
+        
+        self.status_label.setText(f"Layout '{name}' saved.")
+        
+    def load_layout(self, name):
+        state = self.settings.value(f"layouts/{name}/state")
+        geom = self.settings.value(f"layouts/{name}/geometry")
+        
+        if state and geom:
+            self.restoreState(state)
+            self.restoreGeometry(geom)
+            self.status_label.setText(f"Layout '{name}' loaded.")
+        else:
+            self.status_label.setText(f"Error loading layout '{name}'.")
+
+    def manage_layouts_dialog(self):
+        dialog = ManageLayoutsDialog(self.settings, self)
+        dialog.exec()
+        # Refresh menu handled by aboutToShow
+        
+    def show_about(self):
+        QMessageBox.about(self, "About Terrano", "Terrano Editor\n\nA modern terrain generation tool.")
+
 
     def on_selection_changed(self, item, column):
         # The HierarchyPanel now stores IDs, not objects.
@@ -196,3 +359,94 @@ class EditorWindow(QMainWindow):
         # UI Feedback
         self.status_label.setText("Ready")
         self.progress_bar.setVisible(False)
+
+    def closeEvent(self, event):
+        # Save Session State
+        self.settings.setValue("window/state", self.saveState())
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        event.accept()
+
+class ManageLayoutsDialog(QDialog):
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage Layouts")
+        self.settings = settings
+        self.resize(300, 250)
+        
+        layout = QVBoxLayout()
+        
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+        
+        self.refresh_list()
+        
+        # Buttons
+        btn_rename = QPushButton("Rename")
+        btn_rename.clicked.connect(self.rename_layout)
+        layout.addWidget(btn_rename)
+        
+        btn_delete = QPushButton("Delete")
+        btn_delete.clicked.connect(self.delete_layout)
+        layout.addWidget(btn_delete)
+        
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close)
+        
+        self.setLayout(layout)
+        
+    def refresh_list(self):
+        self.list_widget.clear()
+        layouts = self.settings.value("layouts/list", [], type=list)
+        if not isinstance(layouts, list): layouts = []
+        self.list_widget.addItems(layouts)
+        
+    def delete_layout(self):
+        item = self.list_widget.currentItem()
+        if not item: return
+        
+        name = item.text()
+        confirm = QMessageBox.question(self, "Confirm Delete", f"Delete layout '{name}'?", 
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if confirm == QMessageBox.StandardButton.Yes:
+            # Remove from list
+            layouts = self.settings.value("layouts/list", [], type=list)
+            if not isinstance(layouts, list): layouts = []
+            
+            if name in layouts:
+                layouts.remove(name)
+                self.settings.setValue("layouts/list", layouts)
+                
+            # Remove keys (optional, but clean)
+            self.settings.remove(f"layouts/{name}")
+            
+            self.refresh_list()
+
+    def rename_layout(self):
+        item = self.list_widget.currentItem()
+        if not item: return
+        
+        old_name = item.text()
+        new_name, ok = QInputDialog.getText(self, "Rename Layout", "New Name:", text=old_name)
+        
+        if ok and new_name and new_name != old_name:
+            # Update List
+            layouts = self.settings.value("layouts/list", [], type=list)
+            if not isinstance(layouts, list): layouts = []
+            
+            if old_name in layouts:
+                idx = layouts.index(old_name)
+                layouts[idx] = new_name
+                self.settings.setValue("layouts/list", layouts)
+            
+            # Move Data
+            state = self.settings.value(f"layouts/{old_name}/state")
+            geom = self.settings.value(f"layouts/{old_name}/geometry")
+            
+            self.settings.setValue(f"layouts/{new_name}/state", state)
+            self.settings.setValue(f"layouts/{new_name}/geometry", geom)
+            
+            self.settings.remove(f"layouts/{old_name}")
+            
+            self.refresh_list()

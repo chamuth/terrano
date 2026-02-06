@@ -56,9 +56,12 @@ class Entity(QObject):
         if self._parent:
             self._parent.add_child(self)
     
-    def add_child(self, child):
+    def add_child(self, child, index=-1):
         if child not in self._children:
-            self._children.append(child)
+            if index != -1 and 0 <= index <= len(self._children):
+                self._children.insert(index, child)
+            else:
+                self._children.append(child)
             child._parent = self
             self.structure_changed.emit()
             
