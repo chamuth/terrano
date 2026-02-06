@@ -411,7 +411,14 @@ class EditorWindow(QMainWindow):
         # Cancel existing worker if running
         if self.terrain_worker and self.terrain_worker.isRunning():
             self.terrain_worker.stop()
-            self.terrain_worker.wait()
+            try:
+                self.terrain_worker.finished.disconnect()
+            except:
+                pass
+            # Connect to deleteLater to ensure cleanup
+            self.terrain_worker.finished.connect(self.terrain_worker.deleteLater)
+            # DO NOT WAIT: blocking call freezes UI
+            # self.terrain_worker.wait()
         
         # UI Feedback
         self.status_label.setText("Generating Terrain...")

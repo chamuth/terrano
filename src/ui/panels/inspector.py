@@ -39,14 +39,81 @@ class InspectorPanel(QWidget):
     
     def on_entity_changed(self):
         # When entity changes (externally or via Undo), refresh UI
-        # To avoid loops with internal changes, we could potentially block signals
-        # or check values. But build_ui clears everything.
-        # Ideally we just update values, but rebuilding is robust.
-        # Optimization: Check if focus is in one of our widgets?
-        self.build_ui()
+        # Check if structure changed (keys mismatch)
+        if not self.current_entity:
+             self.build_ui()
+             return
+
+        current_props = set()
+        for pname, pdata in self.current_entity.properties.items():
+             if pdata.get("visible", True):
+                 current_props.add(pname)
+                 
+        existing_props = set(self.property_widgets.keys())
         
+        # If structure matches, just update values (preserves focus)
+        if current_props == existing_props:
+            self.refresh_values()
+        else:
+            self.build_ui()
+
+    def refresh_values(self):
+        if not self.current_entity: return
+        
+        # Block signals to prevent feedback loops during update
+        for prop_name, widget in self.property_widgets.items():
+             if prop_name not in self.current_entity.properties: continue
+             
+             data = self.current_entity.properties[prop_name]
+             val = data["value"]
+             
+             # Check type to access widget correctly
+             # We need a standardized interface or isinstance checks
+             # For now, let's assume we can set/get value generically or check types
+             
+             # Check if value actually changed (avoid resetting cursor/focus)
+             current_widget_val = None
+             
+             # NumericSlider logic is consistent, but standard widgets vary
+             if hasattr(widget, "value"): 
+                 current_widget_val = widget.value()
+             elif hasattr(widget, "text"):
+                 current_widget_val = widget.text()
+             elif hasattr(widget, "isChecked"):
+                 current_widget_val = widget.isChecked()
+             elif hasattr(widget, "currentText"): # ComboBox
+                 current_widget_val = widget.currentText()
+                 
+             # Equality check (loose for string/numbers)
+             if str(current_widget_val) == str(val):
+                 continue
+                 
+             # Update
+             try:
+                 # block signals individually
+                 was_blocked = widget.signalsBlocked()
+                 widget.blockSignals(True)
+                 
+                 if hasattr(widget, "setValue"):
+                     widget.setValue(val)
+                 elif hasattr(widget, "setText"):
+                     widget.setText(str(val))
+                 elif hasattr(widget, "setChecked"):
+                     widget.setChecked(val)
+                 elif hasattr(widget, "setCurrentText"):
+                     # ComboBox
+                     # widget.setCurrentText(str(val)) # might not exist in old Qt?
+                     # find index
+                     idx = widget.findText(str(val))
+                     if idx >= 0: widget.setCurrentIndex(idx)
+                     
+                 widget.blockSignals(was_blocked)
+             except:
+                 pass
+
     def build_ui(self):
         # Clear existing
+        self.property_widgets = {} # Reset map
         while self.form_layout.count():
             child = self.form_layout.takeAt(0)
             if child.widget():
@@ -65,6 +132,9 @@ class InspectorPanel(QWidget):
         
         # Properties
         for prop_name, prop_data in self.current_entity.properties.items():
+            if not prop_data.get("visible", True):
+                continue
+                
             dtype = prop_data["type"]
             val = prop_data["value"]
             options = prop_data.get("options")
@@ -86,16 +156,17 @@ class InspectorPanel(QWidget):
                 widget.currentTextChanged.connect(lambda v, p=prop_name: self.update_prop(p, v))
                 
             elif dtype == int:
-                widget = QSpinBox()
-                widget.setRange(prop_data.get("min", -999999), prop_data.get("max", 999999))
-                widget.setValue(val)
+                from src.ui.widgets.numeric_slider import NumericSlider
+                min_v = prop_data.get("min", -999999)
+                max_v = prop_data.get("max", 999999)
+                widget = NumericSlider(value=val, min_val=min_v, max_val=max_v, is_float=False)
                 widget.valueChanged.connect(lambda v, p=prop_name: self.update_prop(p, v))
                 
             elif dtype == float:
-                widget = QDoubleSpinBox()
-                widget.setRange(prop_data.get("min", -999999.0), prop_data.get("max", 999999.0))
-                widget.setValue(val)
-                widget.setSingleStep(0.1)
+                from src.ui.widgets.numeric_slider import NumericSlider
+                min_v = prop_data.get("min", -999999.0)
+                max_v = prop_data.get("max", 999999.0)
+                widget = NumericSlider(value=val, min_val=min_v, max_val=max_v, is_float=True)
                 widget.valueChanged.connect(lambda v, p=prop_name: self.update_prop(p, v))
                 
             elif dtype == bool:
@@ -110,6 +181,8 @@ class InspectorPanel(QWidget):
             if widget:
                 # Add label
                 self.form_layout.addRow(prop_name, widget)
+                # Register for in-place updates
+                self.property_widgets[prop_name] = widget
 
     def update_prop(self, name, value):
         if self.current_entity:

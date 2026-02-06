@@ -44,10 +44,9 @@ class HierarchyPanel(QWidget):
         # Drag & Drop Support
         self.tree.setDragEnabled(True)
         self.tree.setAcceptDrops(True)
-        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        
-        self.tree.setAcceptDrops(True)
-        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        # We handle move logic manually via Commands. 
+        # using DragDropMode.InternalMove makes QTreeWidget try to handle it too, which confuses things.
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         
         # Override dropEvent and dragMoveEvent
         self.tree.dropEvent = self.on_drop_event
@@ -62,9 +61,13 @@ class HierarchyPanel(QWidget):
         # Save expanded state
         expanded_ids = set()
         if hasattr(self, 'items_map'):
-             for eid, item in self.items_map.items():
-                 if item.isExpanded():
-                     expanded_ids.add(eid)
+             for eid, item in list(self.items_map.items()):
+                 try:
+                     # Check validity before access
+                     if item.treeWidget() and item.isExpanded():
+                         expanded_ids.add(eid)
+                 except RuntimeError:
+                     pass
 
         self.tree.clear()
         self.items_map = {} 
@@ -85,8 +88,9 @@ class HierarchyPanel(QWidget):
     def set_root(self, root_entity):
         """Replace the root entity and refresh"""
         self.root_entity = root_entity
-        # Reconnect signals
-        self.root_entity.structure_changed.connect(self.refresh_tree)
+        # Note: We connect structure_changed recursively in add_node, 
+        # so we don't strictly need to connect root here, but it's safe.
+        # self.root_entity.structure_changed.connect(self.refresh_tree)
         self.refresh_tree()
 
     def add_node(self, entity, parent_item):
@@ -99,14 +103,15 @@ class HierarchyPanel(QWidget):
         self.entity_lookup[entity.id] = entity
         
         # Connect to changes
-        # Connect to changes
         try:
             entity.changed.disconnect(self.on_entity_changed)
             entity.renamed.disconnect(self.on_entity_renamed)
+            entity.structure_changed.disconnect(self.refresh_tree)
         except:
             pass
         entity.changed.connect(self.on_entity_changed)
         entity.renamed.connect(self.on_entity_renamed)
+        entity.structure_changed.connect(self.refresh_tree)
         
         parent_item.addChild(item)
         
@@ -453,9 +458,10 @@ class HierarchyPanel(QWidget):
 
     def safe_add(self, parent, e_type):
         new_ent = self.create_entity(e_type)
-        cmd = AddEntityCommand(parent, new_ent)
-        self.undo_stack.push(cmd)
-        self.refresh_tree()
+        if new_ent:
+            cmd = AddEntityCommand(parent, new_ent)
+            self.undo_stack.push(cmd)
+            # self.refresh_tree() - Handled by signal
 
     def add_entity_descendant(self, parent, e_type):
         self.safe_add(parent, e_type)

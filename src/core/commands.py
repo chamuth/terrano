@@ -82,14 +82,12 @@ class MoveEntityCommand(QUndoCommand):
                 self.old_index = -1
                 
     def redo(self):
-        # Remove from old
-        if self.entity._parent:
-             # Just setting parent usually appends. We need strict move.
-             # Easier reusing helper logic or manipulating children list directly?
-             # Let's use public APIs if possible.
-             pass
+        # Remove from old parent first
+        current_parent = self.entity._parent
+        if current_parent:
+            current_parent.remove_child(self.entity)
         
-        # To strictly insert at index, we usually need 'add_child(child, index)'
+        # Add to new parent at index
         if self.new_parent:
              self.new_parent.add_child(self.entity, self.new_index)
         
