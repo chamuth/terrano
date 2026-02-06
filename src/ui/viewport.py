@@ -1,5 +1,6 @@
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtCore import pyqtSignal
 import vispy.scene
 import vispy.scene.cameras
 from vispy.scene import visuals
@@ -8,6 +9,8 @@ from vispy.visuals.filters import ShadingFilter
 import numpy as np
 
 class TerrainViewport(QWidget):
+    mesh_stats_changed = pyqtSignal(int, int)
+
     def __init__(self, terrain_data, road_network, on_click_callback=None, on_paint_callback=None, parent=None):
         super().__init__(parent)
         self.terrain_data = terrain_data
@@ -462,6 +465,7 @@ class TerrainViewport(QWidget):
 
         # Debug stats
         print(f"Mesh Update: V={vertices.shape}, F={faces.shape}")
+        self.mesh_stats_changed.emit(len(vertices), len(faces))
         
         # Pass normals expressly to avoid recalc issues
         # Vispy set_data doesn't take normals directly, removing it. 

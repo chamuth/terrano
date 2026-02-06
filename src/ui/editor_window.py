@@ -58,6 +58,9 @@ class EditorWindow(QMainWindow):
         self.root_terrain.structure_changed.connect(self.schedule_update)
         self.root_terrain.changed.connect(self.schedule_update)
         
+        # Connect mesh stats
+        self.viewport_3d.mesh_stats_changed.connect(self.update_mesh_stats)
+        
         # Generate initial terrain
         self.reprocess_terrain()
     
@@ -103,6 +106,18 @@ class EditorWindow(QMainWindow):
         # 4. Status Bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        
+        # Left Side Stats
+        self.lbl_verts = QLabel("Verts: 0")
+        self.lbl_faces = QLabel("Faces: 0")
+        
+        # Add some spacing style
+        style = "QLabel { padding: 0 10px; color: #888; }"
+        self.lbl_verts.setStyleSheet(style)
+        self.lbl_faces.setStyleSheet(style)
+        
+        self.status_bar.addWidget(self.lbl_verts)
+        self.status_bar.addWidget(self.lbl_faces)
         
         self.status_label = QLabel("Ready")
         
@@ -271,6 +286,10 @@ class EditorWindow(QMainWindow):
         
     def show_about(self):
         QMessageBox.about(self, "About Terrano", "Terrano Editor\n\nA modern terrain generation tool.")
+
+    def update_mesh_stats(self, v_count, f_count):
+        self.lbl_verts.setText(f"Verts: {v_count:,}")
+        self.lbl_faces.setText(f"Faces: {f_count:,}")
 
 
     def on_selection_changed(self, item, column):
