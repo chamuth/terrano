@@ -1,4 +1,7 @@
 import numpy as np
+from PIL import Image
+from scipy.ndimage import gaussian_filter, laplace
+import os
 import uuid
 from enum import Enum
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -97,14 +100,15 @@ class Entity(QObject):
     def on_process(self, heightmap, mask, terrain_size):
         pass
 
-    def define_property(self, name, dtype, value, min_val=None, max_val=None, options=None):
+    def define_property(self, name, dtype, value, min_val=None, max_val=None, options=None, group="General"):
         self.properties[name] = {
             "type": dtype,
             "value": value,
             "min": min_val,
             "max": max_val,
             "options": options, # For Dropdowns (list of strings)
-            "visible": True
+            "visible": True,
+            "group": group
         }
 
     def set_property(self, name, value):
@@ -131,9 +135,9 @@ class TerrainEntity(Entity):
     def __init__(self):
         super().__init__("Terrain", entity_type=EntityType.ROOT)
         # Resolution as options
-        self.define_property("Resolution", str, "512", options=["512", "1024", "2048", "4096"])
-        self.define_property("Size", float, 1000.0, 100.0, 10000.0) # Physical Size
-        self.define_property("Base Height", float, 0.0, -1000.0, 1000.0)
+        self.define_property("Resolution", str, "512", options=["512", "1024", "2048", "4096"], group="Dimensions")
+        self.define_property("Size", float, 1000.0, 100.0, 10000.0, group="Dimensions") # Physical Size
+        self.define_property("Base Height", float, 0.0, -1000.0, 1000.0, group="General")
         
     def on_process(self, heightmap, mask, terrain_size):
         # Base terrain just clears the heightmap to base height
@@ -159,41 +163,44 @@ class GeneratorEntity(Entity):
         self.define_property("Type", str, "Perlin Noise", options=[
             "Perlin Noise", "Simplex Noise", "Gabor Noise", "Alligator Noise", 
             "Voronoi", "Pattern", "Constant"
-        ])
-        self.define_property("Strength", float, 1.0, 0.0, 1.0)
-        self.define_property("Operation", str, "Add", options=["Add", "Subtract", "Replace", "Multiply"])
+        ], group="General")
+        self.define_property("Strength", float, 1.0, 0.0, 1.0, group="General")
+        self.define_property("Operation", str, "Add", options=["Add", "Subtract", "Replace", "Multiply"], group="General")
         
         # Common properties (Perlin, Simplex)
-        self.define_property("Scale", float, 100.0, 10.0, 1000.0)
-        self.define_property("Octaves", int, 6, 1, 12)
-        self.define_property("Persistence", float, 0.5, 0.0, 1.0)
-        self.define_property("Lacunarity", float, 2.0, 1.0, 4.0)
-        self.define_property("Amplitude", float, 50.0, 0.0, 1000.0)
-        self.define_property("Seed", int, 42, 0, 99999)
-        self.define_property("Height Offset", float, 0.0, -500.0, 500.0)
+        self.define_property("Scale", float, 100.0, 10.0, 1000.0, group="Fractal Settings")
+        self.define_property("Octaves", int, 6, 1, 12, group="Fractal Settings")
+        self.define_property("Persistence", float, 0.5, 0.0, 1.0, group="Fractal Settings")
+        self.define_property("Lacunarity", float, 2.0, 1.0, 4.0, group="Fractal Settings")
+        self.define_property("Amplitude", float, 50.0, 0.0, 1000.0, group="General")
+        self.define_property("Seed", int, 42, 0, 99999, group="General")
+        self.define_property("Height Offset", float, 0.0, -500.0, 500.0, group="General")
         
         # Gabor properties
-        self.define_property("Gabor Frequency", float, 0.05, 0.01, 0.2)
-        self.define_property("Gabor Orientation", float, 0.0, -180.0, 180.0)
-        self.define_property("Gabor Bandwidth", float, 1.0, 0.1, 5.0)
-        self.define_property("Gabor Impulses", int, 50, 10, 200)
+        self.define_property("Gabor Frequency", float, 0.05, 0.01, 0.2, group="Gabor Settings")
+        self.define_property("Gabor Orientation", float, 0.0, -180.0, 180.0, group="Gabor Settings")
+        self.define_property("Gabor Bandwidth", float, 1.0, 0.1, 5.0, group="Gabor Settings")
+        self.define_property("Gabor Impulses", int, 50, 10, 200, group="Gabor Settings")
         
         # Alligator properties
-        self.define_property("Alligator Scale", float, 100.0, 10.0, 500.0)
-        self.define_property("Alligator Jitter", float, 1.0, 0.0, 1.0)
+        self.define_property("Alligator Scale", float, 100.0, 10.0, 500.0, group="Alligator Settings")
+        self.define_property("Alligator Jitter", float, 1.0, 0.0, 1.0, group="Alligator Settings")
         
         # Voronoi properties
-        self.define_property("Voronoi Scale", float, 100.0, 10.0, 500.0)
-        self.define_property("Voronoi Metric", str, "F1", options=["F1", "F2", "F2-F1"])
-        self.define_property("Distance Type", str, "euclidean", options=["euclidean", "manhattan", "chebyshev"])
-        self.define_property("Invert Voronoi", bool, False)
+        self.define_property("Voronoi Scale", float, 100.0, 10.0, 500.0, group="Voronoi Settings")
+        self.define_property("Voronoi Metric", str, "F1", options=["F1", "F2", "F2-F1"], group="Voronoi Settings")
+        self.define_property("Distance Type", str, "euclidean", options=["euclidean", "manhattan", "chebyshev"], group="Voronoi Settings")
+        self.define_property("Invert Voronoi", bool, False, group="Voronoi Settings")
         
         # Pattern properties
-        self.define_property("Pattern Type", str, "Linear Ramp", options=["Linear Ramp", "Radial", "Grid", "Checker"])
-        self.define_property("Pattern Direction", float, 0.0, -180.0, 180.0)
-        self.define_property("Pattern Center X", float, 0.5, 0.0, 1.0)
-        self.define_property("Pattern Center Y", float, 0.5, 0.0, 1.0)
-        self.define_property("Pattern Frequency", float, 4.0, 1.0, 20.0)
+        self.define_property("Pattern Type", str, "Linear Ramp", options=["Linear Ramp", "Radial", "Grid", "Checker"], group="Pattern Settings")
+        self.define_property("Pattern Direction", float, 0.0, -180.0, 180.0, group="Pattern Settings")
+        self.define_property("Pattern Center X", float, 0.5, 0.0, 1.0, group="Pattern Settings")
+        self.define_property("Pattern Center Y", float, 0.5, 0.0, 1.0, group="Pattern Settings")
+        self.define_property("Pattern Frequency", float, 4.0, 1.0, 20.0, group="Pattern Settings")
+        
+        # Initial Update
+        self.update_property_visibility()
 
     def on_property_changed(self, name, value):
         if name == "Type":
@@ -358,33 +365,89 @@ class FilterEntity(Entity):
         self.define_property("Type", str, "Erosion", options=[
             "Erosion", "Thermal", "Smooth", "Sharpen", 
             "Distort by Noise", "Terrace", "Clip"
-        ])
+        ], group="General")
         
         # Hydraulic Erosion
-        self.define_property("H-Iterations", int, 5, 1, 100)
-        self.define_property("H-Rain Amount", float, 0.1, 0.0, 1.0)
+        self.define_property("H-Iterations", int, 5, 1, 100, group="Hydraulic Erosion")
+        self.define_property("H-Rain Amount", float, 0.1, 0.0, 1.0, group="Hydraulic Erosion")
         
         # Thermal Erosion
-        self.define_property("T-Iterations", int, 10, 1, 100)
-        self.define_property("T-Strength", float, 0.5, 0.0, 1.0)
+        self.define_property("T-Iterations", int, 10, 1, 100, group="Thermal Erosion")
+        self.define_property("T-Strength", float, 0.5, 0.0, 1.0, group="Thermal Erosion")
+        
+        # Smooth / Sharpen
+        self.define_property("Smooth Sigma", float, 2.0, 0.1, 10.0, group="Smooth Settings")
+        self.define_property("Sharpen Sigma", float, 2.0, 0.1, 10.0, group="Sharpen Settings")
+        self.define_property("Sharpen Strength", float, 1.0, 0.0, 5.0, group="Sharpen Settings")
         
         # Distort by Noise
-        self.define_property("Distort Noise Type", str, "Perlin", options=["Perlin", "Simplex", "Curl"])
-        self.define_property("Distort Amplitude", float, 10.0, 0.1, 100.0)
-        self.define_property("Distort Element Size", float, 50.0, 10.0, 500.0)
-        self.define_property("Distort Substeps", int, 3, 1, 10)
-        self.define_property("Distort Seed", int, 42, 0, 99999)
+        self.define_property("Distort Noise Type", str, "Perlin", options=["Perlin", "Simplex", "Curl"], group="Distortion")
+        self.define_property("Distort Amplitude", float, 10.0, 0.1, 100.0, group="Distortion")
+        self.define_property("Distort Element Size", float, 50.0, 10.0, 500.0, group="Distortion")
+        self.define_property("Distort Substeps", int, 3, 1, 10, group="Distortion")
+        self.define_property("Distort Seed", int, 42, 0, 99999, group="Distortion")
         
         # Terrace
-        self.define_property("Terrace Step Count", int, 10, 2, 50)
-        self.define_property("Terrace Smoothness", float, 0.1, 0.0, 1.0)
+        self.define_property("Terrace Step Count", int, 10, 2, 50, group="Terracing")
+        self.define_property("Terrace Smoothness", float, 0.1, 0.0, 1.0, group="Terracing")
         
         # Clip
-        self.define_property("Clip Min Height", float, -100.0, -1000.0, 1000.0)
-        self.define_property("Clip Max Height", float, 100.0, -1000.0, 1000.0)
-        self.define_property("Clip Soft Strength", float, 0.2, 0.0, 1.0)
-        self.define_property("Use Min Clip", bool, False)
-        self.define_property("Use Max Clip", bool, False)
+        self.define_property("Clip Min Height", float, -100.0, -1000.0, 1000.0, group="Clipping")
+        self.define_property("Clip Max Height", float, 100.0, -1000.0, 1000.0, group="Clipping")
+        self.define_property("Clip Soft Strength", float, 0.2, 0.0, 1.0, group="Clipping")
+        self.define_property("Use Min Clip", bool, False, group="Clipping")
+        self.define_property("Use Max Clip", bool, False, group="Clipping")
+
+        # Initial Update
+        self.update_visibility()
+
+    def on_property_changed(self, name, value):
+        if name == "Type":
+            self.update_visibility()
+        self.changed.emit()
+
+    def update_visibility(self):
+        f_type = self.get_property("Type")
+        
+        # Hydraulic / Simple Erosion
+        is_erosion = (f_type == "Erosion")
+        self.set_property_visible("H-Iterations", is_erosion)
+        self.set_property_visible("H-Rain Amount", is_erosion)
+        
+        # Thermal
+        is_thermal = (f_type == "Thermal")
+        self.set_property_visible("T-Iterations", is_thermal)
+        self.set_property_visible("T-Strength", is_thermal)
+        
+        # Distortion
+        is_distort = (f_type == "Distort by Noise")
+        self.set_property_visible("Distort Noise Type", is_distort)
+        self.set_property_visible("Distort Amplitude", is_distort)
+        self.set_property_visible("Distort Element Size", is_distort)
+        self.set_property_visible("Distort Substeps", is_distort)
+        self.set_property_visible("Distort Seed", is_distort)
+        
+        # Terrace
+        is_terrace = (f_type == "Terrace")
+        self.set_property_visible("Terrace Step Count", is_terrace)
+        self.set_property_visible("Terrace Smoothness", is_terrace)
+        
+        # Clip
+        is_clip = (f_type == "Clip")
+        self.set_property_visible("Clip Min Height", is_clip)
+        self.set_property_visible("Clip Max Height", is_clip)
+        self.set_property_visible("Clip Soft Strength", is_clip)
+        self.set_property_visible("Use Min Clip", is_clip)
+        self.set_property_visible("Use Max Clip", is_clip)
+        
+        # Smooth
+        is_smooth = (f_type == "Smooth")
+        self.set_property_visible("Smooth Sigma", is_smooth)
+        
+        # Sharpen
+        is_sharpen = (f_type == "Sharpen")
+        self.set_property_visible("Sharpen Sigma", is_sharpen)
+        self.set_property_visible("Sharpen Strength", is_sharpen)
         
     def on_process(self, heightmap, mask, terrain_size):
         f_type = self.get_property("Type")
@@ -441,7 +504,7 @@ class FilterEntity(Entity):
 
         elif f_type == "Smooth":
             from scipy.ndimage import gaussian_filter
-            sigma = 2.0
+            sigma = self.get_property("Smooth Sigma")
             if mask is not None:
                 smoothed = gaussian_filter(heightmap, sigma=sigma)
                 heightmap[:] = heightmap * (1.0 - mask) + smoothed * mask
@@ -451,8 +514,11 @@ class FilterEntity(Entity):
         elif f_type == "Sharpen":
             from scipy.ndimage import gaussian_filter
             # Unsharp mask
-            smoothed = gaussian_filter(heightmap, sigma=2.0)
-            detail = heightmap - smoothed
+            sigma = self.get_property("Sharpen Sigma")
+            strength = self.get_property("Sharpen Strength")
+            
+            smoothed = gaussian_filter(heightmap, sigma=sigma)
+            detail = (heightmap - smoothed) * strength
             
             if mask is not None:
                 heightmap[:] += detail * mask
@@ -508,19 +574,65 @@ class FilterEntity(Entity):
 class MaskEntity(Entity):
     def __init__(self, name="Mask"):
         super().__init__(name, entity_type=EntityType.MASK)
-        self.define_property("Type", str, "Circle", options=["Circle", "Square", "Noise"])
-        self.define_property("Invert", bool, False)
-        self.define_property("Size", float, 500.0, 10.0, 2048.0)
-        self.define_property("Falloff", float, 0.0, 0.0, 500.0) # Unused for binary
-        self.define_property("X", float, 0.0, -2048.0, 2048.0)
-        self.define_property("Y", float, 0.0, -2048.0, 2048.0)
         
+        # Main Settings
+        self.define_property("Type", str, "Primitive", options=["Primitive", "Image", "Feature"], group="General")
+        self.define_property("Opacity", float, 1.0, 0.0, 1.0, group="General")
+        self.define_property("Blur", float, 0.0, 0.0, 100.0, group="General")
+        self.define_property("Invert", bool, False, group="General")
+
+        # Primitive Settings
+        self.define_property("Primitive Shape", str, "Circle", options=["Circle", "Square"], group="Primitive Settings")
+        self.define_property("Size", float, 500.0, 10.0, 2048.0, group="Primitive Settings")
+        self.define_property("Falloff", float, 0.0, 0.0, 500.0, group="Primitive Settings") # Keep for potential soft primitves
+        self.define_property("X", float, 0.0, -2048.0, 2048.0, group="Primitive Settings")
+        self.define_property("Y", float, 0.0, -2048.0, 2048.0, group="Primitive Settings")
+        
+        # Image Settings
+        self.define_property("Image Path", str, "", group="Image Settings")
+
+        # Feature Settings
+        self.define_property("Feature Type", str, "Height", options=["Height", "Slope", "Curvature"], group="Feature Settings")
+        self.define_property("Min Val", float, 0.0, -10000.0, 10000.0, group="Feature Settings")
+        self.define_property("Max Val", float, 1000.0, -10000.0, 10000.0, group="Feature Settings")
+        self.define_property("Ramp", float, 0.0, 0.0, 1.0, group="Feature Settings")
+        
+        # Initial visibility update
+        self.update_visibility()
+
+    def on_property_changed(self, name, value):
+        if name == "Type":
+            self.update_visibility()
+
+    def update_visibility(self):
+        m_type = self.get_property("Type")
+        
+        # Primitive
+        show_prim = (m_type == "Primitive")
+        self.set_property_visible("Primitive Shape", show_prim)
+        self.set_property_visible("Size", show_prim)
+        self.set_property_visible("Falloff", show_prim)
+        self.set_property_visible("X", show_prim)
+        self.set_property_visible("Y", show_prim)
+        
+        # Image
+        show_img = (m_type == "Image")
+        self.set_property_visible("Image Path", show_img)
+        
+        # Feature
+        show_feat = (m_type == "Feature")
+        self.set_property_visible("Feature Type", show_feat)
+        self.set_property_visible("Min Val", show_feat)
+        self.set_property_visible("Max Val", show_feat)
+        self.set_property_visible("Ramp", show_feat)
+
     def process(self, heightmap, parent_mask=None, terrain_size=1000.0):
         if not self.get_property("Enabled"):
             return
 
-        # 1. Generate local mask (Invert is handled inside generate_mask now)
-        local_mask = self.generate_mask(heightmap.shape, terrain_size)
+        # 1. Generate local mask 
+        # Pass heightmap for Feature masks
+        local_mask = self.generate_mask(heightmap, terrain_size)
         
         # 2. Combine with parent mask
         effective_mask = local_mask
@@ -531,27 +643,89 @@ class MaskEntity(Entity):
         for child in self._children:
             child.process(heightmap, effective_mask, terrain_size)
             
-    def generate_mask(self, shape, terrain_size):
+    def generate_mask(self, heightmap, terrain_size):
+        # Allow passing shape tuple or full heightmap array
+        if isinstance(heightmap, tuple):
+             shape = heightmap
+             hm_data = None
+        else:
+             shape = heightmap.shape
+             hm_data = heightmap
+
         m_type = self.get_property("Type")
         h, w = shape
         mask = np.zeros(shape, dtype=np.float32)
-        
-        cx = w//2 + self.get_property("X")
-        cy = h//2 + self.get_property("Y") 
-        radius = self.get_property("Size") / 2.0
-        
-        y_idx, x_idx = np.ogrid[:h, :w]
-        
-        if m_type == "Circle":
-            dist_sq = (x_idx - cx)**2 + (y_idx - cy)**2
-            # Binary threshold
-            mask = np.where(dist_sq <= radius**2, 1.0, 0.0)
+
+        # --- GENERATION ---
+        if m_type == "Primitive":
+            shape_type = self.get_property("Primitive Shape")
+            size = self.get_property("Size")
+            cx = w//2 + self.get_property("X")
+            cy = h//2 + self.get_property("Y")
             
-        elif m_type == "Square":
-            mask [ int(cy-radius):int(cy+radius), int(cx-radius):int(cx+radius) ] = 1.0
+            y, x = np.ogrid[:h, :w]
             
-        # Apply Invert
+            if shape_type == "Circle":
+                dist_sq = (x - cx)**2 + (y - cy)**2
+                radius_sq = (size/2)**2
+                mask = (dist_sq <= radius_sq).astype(np.float32)
+                
+            elif shape_type == "Square":
+                half_size = size / 2
+                mask = ((np.abs(x - cx) <= half_size) & (np.abs(y - cy) <= half_size)).astype(np.float32)
+                
+        elif m_type == "Image":
+            path = self.get_property("Image Path")
+            if path and os.path.exists(path):
+                try:
+                    img = Image.open(path).convert('L') # Grayscale
+                    img = img.resize((w, h))
+                    img_data = np.array(img, dtype=np.float32) / 255.0
+                    mask = img_data
+                except Exception as e:
+                    print(f"Error loading mask image: {e}")
+
+        elif m_type == "Feature":
+            if hm_data is None:
+                # Fallback if no heightmap data provided
+                return mask 
+            
+            f_type = self.get_property("Feature Type")
+            min_v = self.get_property("Min Val")
+            max_v = self.get_property("Max Val")
+            
+            feature_map = np.zeros_like(hm_data)
+            
+            if f_type == "Height":
+                feature_map = hm_data
+                
+            elif f_type == "Slope":
+                # Gradient magnitude
+                gy, gx = np.gradient(hm_data)
+                slope = np.sqrt(gx**2 + gy**2)
+                feature_map = slope
+                
+            elif f_type == "Curvature":
+                # Laplacian
+                curvature = laplace(hm_data)
+                feature_map = curvature
+            
+            # Thresholding
+            mask = ((feature_map >= min_v) & (feature_map <= max_v)).astype(np.float32)
+            
+        # --- POST PROCESSING ---
+        
+        # 1. Blur
+        blur_amt = self.get_property("Blur")
+        if blur_amt > 0:
+            mask = gaussian_filter(mask, sigma=blur_amt)
+            
+        # 2. Invert
         if self.get_property("Invert"):
             mask = 1.0 - mask
             
+        # 3. Opacity
+        opacity = self.get_property("Opacity")
+        mask = mask * opacity
+        
         return mask

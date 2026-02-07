@@ -374,6 +374,7 @@ class EditorWindow(QMainWindow):
         items = self.hierarchy.tree.selectedItems()
         if not items:
             self.inspector.set_entity(None)
+            self.viewport_2d.set_mask(None)
             return
             
         item = items[0]
@@ -383,6 +384,7 @@ class EditorWindow(QMainWindow):
         entity = self.hierarchy.get_entity_from_item(item)
         if not entity: 
             self.inspector.set_entity(None)
+            self.viewport_2d.set_mask(None)
             return
         
         self.inspector.set_entity(entity)
@@ -407,7 +409,14 @@ class EditorWindow(QMainWindow):
             res = int(self.root_terrain.get_property("Resolution"))
             size = self.root_terrain.get_property("Size")
             
-            mask = entity.generate_mask((res, res), size)
+            # Pass heightmap for Feature masks
+            if hasattr(self, 'render_data') and self.render_data.heightmap is not None:
+                heightmap = self.render_data.heightmap
+                mask = entity.generate_mask(heightmap, size)
+            else:
+                 # Fallback
+                 mask = entity.generate_mask((res, res), size)
+                 
             self.viewport_2d.set_mask(mask)
         else:
             self.viewport_2d.set_mask(None)

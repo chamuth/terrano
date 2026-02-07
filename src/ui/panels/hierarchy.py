@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QMenu, QWidget, QVBoxLayout, 
                              QToolBar, QAbstractItemView)
-from PyQt6.QtGui import QAction, QIcon, QBrush
+from PyQt6.QtGui import QAction, QIcon, QBrush, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt
 from src.core.scene import TerrainEntity, FilterEntity, MaskEntity, GeneratorEntity, EntityType
 from src.core.commands import AddEntityCommand, RemoveEntityCommand, MoveEntityCommand, RenameEntityCommand
@@ -54,6 +54,10 @@ class HierarchyPanel(QWidget):
         
         self.layout.addWidget(self.tree)
         self.setLayout(self.layout)
+        
+        # Delete Shortcut
+        self.del_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.tree)
+        self.del_shortcut.activated.connect(self.delete_selected_entity)
         
         self.refresh_tree()
         
@@ -465,4 +469,26 @@ class HierarchyPanel(QWidget):
 
     def add_entity_descendant(self, parent, e_type):
         self.safe_add(parent, e_type)
+
+    def delete_selected_entity(self):
+        items = self.tree.selectedItems()
+        if not items: return
+        
+        item = items[0]
+        entity = self.get_entity_from_item(item)
+        
+        if entity and entity != self.root_entity:
+            # Confirm deletion? Or just undoable?
+            # Undoable is usually fine without confirm for simple entities
+            cmd = RemoveEntityCommand(entity)
+            self.undo_stack.push(cmd)
+            # Structure change signal will refresh tree via connection -> No, refresh_tree needs to be called
+            # OR parent structure_changed signal connected to refresh_tree
+            # root_entity.structure_changed is connect to refresh_tree in Init.
+            # RemoveEntityCommand affects parent structure.
+            # So it should be fine.  
+            
+            # Explicit refresh to be safe or if signal missing
+            # self.refresh_tree()
+
 
