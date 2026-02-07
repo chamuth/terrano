@@ -1,7 +1,7 @@
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QLineEdit, QSpinBox, 
                              QDoubleSpinBox, QCheckBox, QLabel, QScrollArea, QToolButton,
-                             QHBoxLayout, QPushButton, QFileDialog)
+                             QHBoxLayout, QPushButton, QFileDialog, QComboBox)
 from PyQt6.QtCore import Qt, QSize
 import shutil
 import os
@@ -60,20 +60,46 @@ class CollapsibleGroup(QWidget):
         
     def add_row(self, label, widget):
         self.content_layout.addRow(label, widget)
-from src.core.commands import PropertyChangeCommand, RenameEntityCommand
+from src.core.commands import PropertyChangeCommand, RenameEntityCommand, ApplyPresetCommand
 
 class InspectorPanel(QWidget):
-    def __init__(self, undo_stack, parent=None):
+    def __init__(self, undo_stack, resource_manager=None, parent=None):
         super().__init__(parent)
         self.undo_stack = undo_stack
+        self.resource_manager = resource_manager
         self.current_entity = None
+        self.save_preset_callback = None
         
         self.main_layout = QVBoxLayout()
         self.main_layout.setContentsMargins(0,0,0,0)
+        self.main_layout.setSpacing(0)
+        
+        # --- Presets Header ---
+        self.header_widget = QWidget()
+        self.header_widget.setStyleSheet("background-color: #2b2b2b; border-bottom: 1px solid #3a3a3a;")
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(8, 4, 8, 4)
+        self.header_widget.setLayout(header_layout)
+        
+        header_layout.addWidget(QLabel("Preset:"))
+        
+        self.preset_combo = QComboBox()
+        self.preset_combo.setSizePolicy(self.preset_combo.sizePolicy().Policy.Expanding, self.preset_combo.sizePolicy().Policy.Fixed)
+        self.preset_combo.setPlaceholderText("Select...")
+        # Style needed for dark mode visibility of combo
+        self.preset_combo.activated.connect(self.on_preset_selected)
+        header_layout.addWidget(self.preset_combo)
+        
+        btn_save = QToolButton()
+        btn_save.setText("Save new preset") # Or icon
+        btn_save.clicked.connect(self.on_save_preset)
+        header_layout.addWidget(btn_save)
+        
+        self.main_layout.addWidget(self.header_widget)
+        # ----------------------
         
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.content_widget = QWidget()
         self.content_widget = QWidget()
         # Main layout for content is now VBox to stack groups
         self.scroll_layout = QVBoxLayout()
@@ -84,6 +110,32 @@ class InspectorPanel(QWidget):
         self.main_layout.addWidget(self.scroll)
         self.setLayout(self.main_layout)
 
+    def on_preset_selected(self, index):
+        if index < 0 or not self.current_entity or not self.resource_manager: return
+        
+        item_data = self.preset_combo.itemData(index)
+        # Skip "Select Preset..." which has None data
+        if not item_data: return
+        
+        preset_name = item_data.get("name", "Unknown Preset")
+        
+        # Read Data
+        properties, msg = self.resource_manager.read_preset_data(self.current_entity, item_data["path"])
+        
+        if properties is None:
+            # Error
+            print(msg)
+            # Maybe show dialog?
+            return
+            
+        # Push Command
+        cmd = ApplyPresetCommand(self.current_entity, preset_name, properties)
+        self.undo_stack.push(cmd)
+        
+        # Reset combo to placeholder? 
+        # self.preset_combo.setCurrentIndex(0)
+        # Or keep selection? Keep selection is fine.
+
     def set_entity(self, entity):
         if self.current_entity:
              try:
@@ -92,6 +144,24 @@ class InspectorPanel(QWidget):
                  pass
         
         self.current_entity = entity
+        
+        # Refresh Presets Header
+        self.preset_combo.clear()
+        if self.current_entity and self.resource_manager:
+            self.header_widget.show()
+            self.preset_combo.addItem("Select Preset...", None)
+            
+            presets = self.resource_manager.get_presets(self.current_entity.entity_type.name)
+            for p in presets:
+                self.preset_combo.addItem(p["name"], p)
+        else:
+            self.preset_combo.clear()
+            # self.header_widget.hide() # Keep visible or hide? User wants it in top right.
+            # Maybe hide if no entity?
+            if not self.current_entity:
+                self.header_widget.hide()
+            else:
+                self.header_widget.show()
         
         if self.current_entity:
             self.current_entity.changed.connect(self.on_entity_changed)
@@ -359,6 +429,18 @@ class InspectorPanel(QWidget):
             # Simple heuristic: rebuild if "Type" changed
             if name == "Type":
                 self.build_ui()
+
+    def on_save_preset(self):
+        if not self.current_entity: return
+        # Check callback
+        if not self.save_preset_callback:
+            print("No preset callback registered.")
+            return
+
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Save Preset", "Preset Name:", text=self.current_entity.name)
+        if ok and name:
+            self.save_preset_callback(self.current_entity, name)
 
     def push_rename(self, new_name):
         if self.current_entity and self.current_entity.name != new_name:

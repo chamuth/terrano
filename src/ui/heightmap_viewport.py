@@ -19,12 +19,13 @@ class HeightmapViewport(QWidget):
         self.view.camera.set_range(x=(-50, 1050), y=(-50, 1050))
         
         # Layout
+        # Layout
         self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(0, 0, 0, 0) # Zero margins important for precise docking
         self.layout.addWidget(self.canvas.native)
         self.setLayout(self.layout)
         
-        self.layout.addWidget(self.canvas.native)
-        self.setLayout(self.layout)
+        self.setMinimumSize(0, 0)
         
         # Image Visual (Foreground)
         # Interpolation: 'nearest' works well for heightmap pixel inspection, 'cubic' for smooth look

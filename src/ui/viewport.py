@@ -25,6 +25,8 @@ class TerrainViewport(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(self.layout)
         
+        self.setMinimumSize(0, 0)
+        
         # Vispy Canvas
         # IMPORTANT: Do not set parent=self here immediately if we want to add to layout manually.
         # But SceneCanvas auto-creates a backend widget.

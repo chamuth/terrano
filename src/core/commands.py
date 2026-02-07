@@ -91,6 +91,24 @@ class MoveEntityCommand(QUndoCommand):
         if self.new_parent:
              self.new_parent.add_child(self.entity, self.new_index)
         
-    def undo(self):
         if self.old_parent:
             self.old_parent.add_child(self.entity, self.old_index)
+
+class ApplyPresetCommand(QUndoCommand):
+    def __init__(self, entity, preset_name, new_properties):
+        super().__init__(f"Apply Preset {preset_name}")
+        self.entity = entity
+        self.new_properties = new_properties
+        self.old_properties = {}
+        
+        # Snapshot current state of keys that will be changed
+        for key in new_properties.keys():
+            self.old_properties[key] = entity.get_property(key)
+            
+    def redo(self):
+        for key, value in self.new_properties.items():
+            self.entity.set_property(key, value)
+            
+    def undo(self):
+        for key, value in self.old_properties.items():
+            self.entity.set_property(key, value)

@@ -13,6 +13,7 @@ from src.ui.viewport import TerrainViewport
 from src.ui.heightmap_viewport import HeightmapViewport
 from src.core.roads import RoadNetwork
 from src.ui.terrain_worker import TerrainWorker
+from src.ui.panels.resources import ResourcesPanel
 from src.ui.terrain_worker import TerrainWorker
 from src.ui.widgets.progress_indicator import QProgressIndicator
 from src.core.project import ProjectManager
@@ -99,6 +100,7 @@ class EditorWindow(QMainWindow):
         self.dock_viewport_3d.setObjectName("Viewport3D")
         self.viewport_3d = TerrainViewport(self.render_data, self.road_net)
         self.dock_viewport_3d.setWidget(self.viewport_3d)
+        self.dock_viewport_3d.setMinimumSize(0, 0)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_3d)
         
         # 2D Viewport Dock
@@ -106,6 +108,7 @@ class EditorWindow(QMainWindow):
         self.dock_viewport_2d.setObjectName("Viewport2D")
         self.viewport_2d = HeightmapViewport(self.render_data)
         self.dock_viewport_2d.setWidget(self.viewport_2d)
+        self.dock_viewport_2d.setMinimumSize(0, 0)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_2d)
         
         # Split them side-by-side
@@ -121,9 +124,25 @@ class EditorWindow(QMainWindow):
         # 3. Inspector (Dock Right)
         self.dock_inspector = QDockWidget("Properties", self)
         self.dock_inspector.setObjectName("Inspector")
-        self.inspector = InspectorPanel(self.undo_stack)
+        # Pass resource_manager
+        self.inspector = InspectorPanel(self.undo_stack, resource_manager=self.project_manager.resource_manager)
+        self.inspector.save_preset_callback = self.on_save_preset # Callback
         self.dock_inspector.setWidget(self.inspector)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_inspector)
+        
+        # 3b. Resources (Dock Left, Tabbed with Hierarchy usually or Bottom)
+        self.dock_resources = QDockWidget("Resources", self)
+        self.dock_resources.setObjectName("Resources")
+        # We need to access project_manager from editor
+        self.resources_panel = ResourcesPanel(self.project_manager.resource_manager, self)
+        self.dock_resources.setWidget(self.resources_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_resources)
+        
+        # Refresh Inspector Presets when resources change
+        self.project_manager.resource_manager.resources_changed.connect(lambda: self.inspector.set_entity(self.inspector.current_entity))
+        
+        # Tabify with Hierarchy
+        self.tabifyDockWidget(self.dock_hierarchy, self.dock_resources)
         
         # 4. Status Bar
         self.status_bar = QStatusBar()
@@ -153,8 +172,8 @@ class EditorWindow(QMainWindow):
         self.status_bar.addPermanentWidget(self.status_label)
         
         # Set initial dock sizes
-        self.dock_hierarchy.setMinimumWidth(300)
-        self.dock_inspector.setMinimumWidth(350)
+        # self.dock_hierarchy.setMinimumWidth(300)
+        # self.dock_inspector.setMinimumWidth(350)
 
         # 5. Menu Bar
         self.create_menu_bar()
@@ -552,6 +571,14 @@ class EditorWindow(QMainWindow):
         self.status_label.setText(msg)
         self.update_title()
         return success
+    
+    def on_save_preset(self, entity, name):
+        if not self.project_manager.resource_manager: return
+        
+        success, msg = self.project_manager.resource_manager.save_preset(entity, name)
+        self.status_label.setText(msg)
+        if not success:
+             QMessageBox.critical(self, "Error", msg)
 
     def save_project_as(self):
         # Prompt for FOLDER
@@ -583,6 +610,11 @@ class EditorWindow(QMainWindow):
         if not fpath: return
         
         root, msg = self.project_manager.load_project(fpath)
+        if root:
+             # Manual Refresh after load? ProjectManager does it.
+             # self.resources_panel.populate_tree() # listener should handle it
+             pass 
+        
         if root:
             self.reload_scene(root)
             self.undo_stack.clear()

@@ -8,6 +8,9 @@ class ProjectManager:
         self.is_dirty = False
         self.project_name = "Untitled"
         
+        from src.core.resources import ResourceManager
+        self.resource_manager = ResourceManager(self)
+        
     def new_project(self):
         """Reset state."""
         self.current_project_path = None
@@ -45,6 +48,9 @@ class ProjectManager:
             if root_entity:
                 root_entity.set_cache_dir(cache_dir, recursive=True)
                 
+            # Refresh Resources (in case new files were created or path changed)
+            self.resource_manager.refresh()
+                
             return True, "Project saved successfully."
             
         except Exception as e:
@@ -73,6 +79,9 @@ class ProjectManager:
             cache_dir = os.path.join(self.current_project_path, ".cache")
             if root_entity:
                 root_entity.set_cache_dir(cache_dir, recursive=True)
+            
+            # Refresh Resources
+            self.resource_manager.refresh()
             
             return root_entity, "Project loaded."
             
