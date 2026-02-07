@@ -3,8 +3,7 @@ Terrain filters for heightfield operations.
 Implements Distort by Noise, Terrace, and Clip filters.
 """
 import numpy as np
-from scipy.ndimage import gaussian_filter
-
+from src.core.backend import xp, ndimage, to_device
 
 class DistortByNoiseFilter:
     """
@@ -24,6 +23,9 @@ class DistortByNoiseFilter:
     
     def _generate_displacement_field(self, size, terrain_size):
         """Generate 2D displacement vectors using noise."""
+        noise_x = None
+        noise_y = None
+
         if self.noise_type == "Perlin":
             from src.generators.perlin_noise import PerlinNoiseGenerator
             gen = PerlinNoiseGenerator(self.element_size, 4, 0.5, 2.0, self.seed, 1.0)
@@ -45,7 +47,10 @@ class DistortByNoiseFilter:
             potential = gen.generate(size, terrain_size)
             
             # Compute gradients
-            gy, gx = np.gradient(potential)
+            # Gradient returns list [gy, gx] for 2D
+            grads = np.gradient(potential)
+            gy, gx = grads[0], grads[1]
+            
             # Curl: rotate 90 degrees
             noise_x = -gy
             noise_y = gx
@@ -53,7 +58,8 @@ class DistortByNoiseFilter:
             noise_x = np.zeros((size, size))
             noise_y = np.zeros((size, size))
         
-        return noise_x, noise_y
+        # Move to device
+        return to_device(noise_x), to_device(noise_y)
     
     def apply(self, heightmap, terrain_size=1000.0):
         """Apply distortion filter to heightmap."""
@@ -73,28 +79,37 @@ class DistortByNoiseFilter:
         
         for step in range(self.substeps):
             # Create coordinate grids
-            y_coords, x_coords = np.mgrid[0:size, 0:size]
+            # xp.mgrid works like np.mgrid
+            # but usually it returns a list/array of grids.
+            # dense meshgrid:
+            y_coords, x_coords = xp.mgrid[0:size, 0:size]
             
             # Apply displacement
             x_new = x_coords + disp_x * step_size
             y_new = y_coords + disp_y * step_size
             
             # Clamp to valid range
-            x_new = np.clip(x_new, 0, size - 1)
-            y_new = np.clip(y_new, 0, size - 1)
+            x_new = xp.clip(x_new, 0, size - 1)
+            y_new = xp.clip(y_new, 0, size - 1)
             
             # Bilinear interpolation
-            x0 = np.floor(x_new).astype(int)
-            x1 = np.clip(x0 + 1, 0, size - 1)
-            y0 = np.floor(y_new).astype(int)
-            y1 = np.clip(y0 + 1, 0, size - 1)
+            x0 = xp.floor(x_new).astype(int)
+            x1 = xp.clip(x0 + 1, 0, size - 1)
+            y0 = xp.floor(y_new).astype(int)
+            y1 = xp.clip(y0 + 1, 0, size - 1)
             
             wx = x_new - x0
             wy = y_new - y0
             
             # Sample and interpolate
-            result = (1 - wy) * ((1 - wx) * result[y0, x0] + wx * result[y0, x1]) + \
-                     wy * ((1 - wx) * result[y1, x0] + wx * result[y1, x1])
+            # Note: indexing with arrays works in CuPy
+            val_00 = result[y0, x0]
+            val_01 = result[y0, x1]
+            val_10 = result[y1, x0]
+            val_11 = result[y1, x1]
+            
+            result = (1 - wy) * ((1 - wx) * val_00 + wx * val_01) + \
+                     wy * ((1 - wx) * val_10 + wx * val_11)
         
         return result
 
@@ -131,7 +146,7 @@ class TerraceFilter:
         
         # Quantize to steps
         step_index = normalized * self.step_count
-        terraced = np.floor(step_index) / self.step_count
+        terraced = xp.floor(step_index) / self.step_count
         
         # Blend with original for smoothness
         if self.smoothness > 0:
@@ -160,9 +175,9 @@ class ClipFilter:
         """Apply soft clipping with smooth transition."""
         if self.soft_clip_strength <= 0:
             if is_min:
-                return np.maximum(values, threshold)
+                return xp.maximum(values, threshold)
             else:
-                return np.minimum(values, threshold)
+                return xp.minimum(values, threshold)
         
         # Soft clip range
         soft_range = self.soft_clip_strength * 50.0  # Arbitrary scaling
@@ -170,12 +185,12 @@ class ClipFilter:
         if is_min:
             # Smooth transition below threshold
             diff = threshold - values
-            blend = np.clip(diff / soft_range, 0, 1)
+            blend = xp.clip(diff / soft_range, 0, 1)
             return values * (1 - blend) + threshold * blend
         else:
             # Smooth transition above threshold
             diff = values - threshold
-            blend = np.clip(diff / soft_range, 0, 1)
+            blend = xp.clip(diff / soft_range, 0, 1)
             return values * (1 - blend) + threshold * blend
     
     def apply(self, heightmap, terrain_size=1000.0):

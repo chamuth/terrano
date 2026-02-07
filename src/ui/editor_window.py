@@ -459,7 +459,7 @@ class EditorWindow(QMainWindow):
         self.terrain_worker.finished.connect(self.on_terrain_generated)
         self.terrain_worker.start()
     
-    def on_terrain_generated(self, heightmap, phys_size):
+    def on_terrain_generated(self, heightmap, phys_size, elapsed_time=0.0):
         """Called when background terrain generation completes"""
         
         # Check if resolution or scale changed
@@ -485,7 +485,7 @@ class EditorWindow(QMainWindow):
         self.viewport_2d.update_image()
         
         # UI Feedback
-        self.status_label.setText("Ready")
+        self.status_label.setText(f"Ready ({elapsed_time*1000:.1f} ms)")
         self.progress_indicator.stopAnimation()
         
         # Initial Fit

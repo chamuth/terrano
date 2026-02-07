@@ -66,14 +66,17 @@ class HeightmapViewport(QWidget):
         
         
     def update_image(self):
+        from src.core.backend import to_cpu
+
         # Vispy Image expects (H, W) or (H, W, 3/4)
         # TerrainData is (N, 3), we need to maintain a 2D grid representation
         # Assuming TerrainData might have raw buffer or we reshape
         
         # Check if terrain_data exposes a 2D grid directly
         if self.mask_data is not None:
-             # Render Mask
-             self.image.set_data(self.mask_data)
+             # Render Mask (ensure CPU)
+             mask_cpu = to_cpu(self.mask_data)
+             self.image.set_data(mask_cpu)
              self.image.clim = (0, 1)
              self.image.cmap = 'grays' # Black=0, White=1
              
@@ -89,8 +92,14 @@ class HeightmapViewport(QWidget):
             # Standard: Image (0,0) is top-left.
             # Terrain (0,0) is usually corner.
             
-            self.image.set_data(data)
-            self.image.clim = (-50, 150) # Approx range, ideally dynamic
+            # Ensure CPU
+            data_cpu = to_cpu(data)
+            self.image.set_data(data_cpu)
+            
+            # Set clim based on actual data range for better visibility?
+            # Or keep fixed? Fixed is better for consistent editing.
+            # But maybe adaptive texturing.
+            self.image.clim = (-50, 250) # Increased range
             self.image.cmap = 'grays'
             
         self.canvas.update()

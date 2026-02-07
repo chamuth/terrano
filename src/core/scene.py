@@ -1,6 +1,7 @@
 import numpy as np
+from src.core.backend import xp, ndimage, to_cpu, to_device, synchronize
 from PIL import Image
-from scipy.ndimage import gaussian_filter, laplace
+# from scipy.ndimage import gaussian_filter, laplace # Removed, using backend.ndimage
 import os
 import uuid
 from enum import Enum
@@ -13,7 +14,6 @@ class EntityType(Enum):
     MASK = 3
 
 class Entity(QObject):
-    # Signal when properties change so Inspector/Viewport can update
     # Signal when properties change so Inspector/Viewport can update
     changed = pyqtSignal()
     renamed = pyqtSignal() # Signal specifically for renaming (no recompute needed)
@@ -77,7 +77,9 @@ class Entity(QObject):
 
     def save_cache(self, data):
         try:
-            np.save(self.get_cache_path(), data)
+            # Validating data is on CPU before saving (numpy.save requires it)
+            cpu_data = to_cpu(data)
+            np.save(self.get_cache_path(), cpu_data)
         except Exception as e:
             print(f"Failed to save cache for {self.name}: {e}")
 
@@ -170,19 +172,26 @@ class Entity(QObject):
         # 1. Caching Check
         if not self.is_dirty and input_version is not None and input_version == self.last_input_version:
             if self._cached_output is not None:
-                return self._cached_output, self.id
+                # Ensure cached output is on the correct device
+                return to_device(self._cached_output), self.id
             
             loaded = self.load_cache()
             if loaded is not None:
                 self._cached_output = loaded
-                return loaded, self.id
+                return to_device(loaded), self.id
 
         # 2. Process
         # Copy input to avoid mutating ancestor's buffer
-        current_heightmap = input_heightmap.copy() if input_heightmap is not None else None
+        if input_heightmap is not None:
+             # Ensure input is on device
+             input_heightmap = to_device(input_heightmap)
+             current_heightmap = input_heightmap.copy()
+        else:
+             current_heightmap = None
         
         # Self Logic
-        self.on_process(current_heightmap, mask, terrain_size)
+        if current_heightmap is not None:
+             self.on_process(current_heightmap, mask, terrain_size)
         
         # Children Logic
         # We generate a strict version ID for the flow between children
@@ -193,6 +202,10 @@ class Entity(QObject):
                 current_heightmap, current_version = child.process(current_heightmap, mask, terrain_size, current_version)
                 
         # 3. Update Cache
+        # Store on CPU to save VRAM? Or keep on GPU for speed?
+        # Let's keep on CPU for cache to save VRAM, but this means to_cpu every time?
+        # Actually, self._cached_output should probably match output device for speed.
+        # But if VRAM is tight... let's keep it on same device as execution.
         self._cached_output = current_heightmap
         self.last_input_version = input_version
         
@@ -372,7 +385,11 @@ class GeneratorEntity(Entity):
         op = self.get_property("Operation")
         strength = self.get_property("Strength")
         
-        generated = np.zeros_like(heightmap)
+        # Ensure correct backend array initialization
+        generated = xp.zeros_like(heightmap)
+        
+        # Temporary var to hold raw generator output (likely NumPy)
+        raw_generated = None
         
         if gen_type == "Perlin Noise":
             from src.generators.perlin_noise import PerlinNoiseGenerator
@@ -386,7 +403,8 @@ class GeneratorEntity(Entity):
             style = self.get_property("Perlin Style")
             
             gen = PerlinNoiseGenerator(scale, octaves, pers, lac, seed, amp, style)
-            generated = gen.generate(heightmap.shape[0], terrain_size) + offset
+            # Generators usually return numpy array.
+            raw_generated = gen.generate(heightmap.shape[0], terrain_size) + offset
             
         elif gen_type == "Simplex Noise":
             from src.generators.noise_library import SimplexNoiseGenerator
@@ -399,7 +417,7 @@ class GeneratorEntity(Entity):
             offset = self.get_property("Height Offset")
             
             gen = SimplexNoiseGenerator(scale, octaves, pers, lac, seed, amp)
-            generated = gen.generate(heightmap.shape[0], terrain_size) + offset
+            raw_generated = gen.generate(heightmap.shape[0], terrain_size) + offset
             
         elif gen_type == "Gabor Noise":
             from src.generators.noise_library import GaborNoiseGenerator
@@ -411,7 +429,7 @@ class GeneratorEntity(Entity):
             amp = self.get_property("Amplitude")
             
             gen = GaborNoiseGenerator(freq, orient, bandwidth, impulses, seed, amp)
-            generated = gen.generate(heightmap.shape[0], terrain_size)
+            raw_generated = gen.generate(heightmap.shape[0], terrain_size)
             
         elif gen_type == "Alligator Noise":
             from src.generators.noise_library import AlligatorNoiseGenerator
@@ -421,7 +439,7 @@ class GeneratorEntity(Entity):
             amp = self.get_property("Amplitude")
             
             gen = AlligatorNoiseGenerator(scale, jitter, seed, amp)
-            generated = gen.generate(heightmap.shape[0], terrain_size)
+            raw_generated = gen.generate(heightmap.shape[0], terrain_size)
             
         elif gen_type == "Voronoi":
             from src.generators.noise_library import VoronoiGenerator
@@ -433,7 +451,7 @@ class GeneratorEntity(Entity):
             invert = self.get_property("Invert Voronoi")
             
             gen = VoronoiGenerator(scale, metric, dist_type, seed, amp, invert)
-            generated = gen.generate(heightmap.shape[0], terrain_size)
+            raw_generated = gen.generate(heightmap.shape[0], terrain_size)
             
         elif gen_type == "Pattern":
             from src.generators.noise_library import PatternGenerator
@@ -445,11 +463,16 @@ class GeneratorEntity(Entity):
             amp = self.get_property("Amplitude")
             
             gen = PatternGenerator(pattern_type, direction, (center_x, center_y), frequency, amp)
-            generated = gen.generate(heightmap.shape[0], terrain_size)
+            raw_generated = gen.generate(heightmap.shape[0], terrain_size)
             
         elif gen_type == "Constant":
             offset = self.get_property("Height Offset")
+            # Fill directly on GPU if relevant
             generated[:] = offset
+            
+        # Move raw_generated to device
+        if raw_generated is not None:
+            generated = to_device(raw_generated)
 
         # Blend Logic
         # Apply mask
@@ -588,8 +611,8 @@ class FilterEntity(Entity):
             k_evap = self.get_property("H-Evaporation Rate")
             
             # Initialization
-            water = np.zeros_like(heightmap)
-            sediment = np.zeros_like(heightmap)
+            water = xp.zeros_like(heightmap)
+            sediment = xp.zeros_like(heightmap)
             h, w = heightmap.shape
             
             # Precompute neighbor offsets for vectorization
@@ -598,7 +621,7 @@ class FilterEntity(Entity):
             for _ in range(passes):
                 # 1. Add Water (Rain)
                 # Normalize water to prevent explosion
-                np.clip(water, 0, 1000.0, out=water)
+                xp.clip(water, 0, 1000.0, out=water)
                 
                 # Only rain on unmasked areas if mask is present, or globally
                 if mask is not None:
@@ -612,8 +635,7 @@ class FilterEntity(Entity):
                 
                 # Calculate diffs
                 # Pad for boundary - Use constant (abyss) to allow drainage!
-                # If we assume terrain is > -1000, using -10000 ensures water flows off
-                padded = np.pad(total_height, 1, mode='constant', constant_values=-10000.0)
+                padded = xp.pad(total_height, 1, mode='constant', constant_values=-10000.0)
                 
                 d_n = total_height - padded[:-2, 1:-1]
                 d_s = total_height - padded[2:, 1:-1]
@@ -621,23 +643,22 @@ class FilterEntity(Entity):
                 d_e = total_height - padded[1:-1, 2:]
                 
                 # Flux (only flow to lower)
-                flux_n = np.maximum(0, d_n)
-                flux_s = np.maximum(0, d_s)
-                flux_w = np.maximum(0, d_w)
-                flux_e = np.maximum(0, d_e)
+                flux_n = xp.maximum(0, d_n)
+                flux_s = xp.maximum(0, d_s)
+                flux_w = xp.maximum(0, d_w)
+                flux_e = xp.maximum(0, d_e)
                 
                 # Normalize flux to prevent negative water
                 flux_sum = flux_n + flux_s + flux_w + flux_e
                 
                 # Avoid div by zero
-                flux_sum_safe = np.maximum(flux_sum, 1e-6)
+                flux_sum_safe = xp.maximum(flux_sum, 1e-6)
                 
                 # If sum > water, scale down magnitude
-                # Use a time step factor (dt) for stability? Let's stick to 1.0 but enforce limit
-                scale_factor = np.minimum(1.0, water / flux_sum_safe)
+                scale_factor = xp.minimum(1.0, water / flux_sum_safe)
                 
                 # Sanity check scale factor
-                scale_factor = np.nan_to_num(scale_factor)
+                scale_factor = xp.nan_to_num(scale_factor)
                 
                 flux_n *= scale_factor
                 flux_s *= scale_factor
@@ -645,31 +666,23 @@ class FilterEntity(Entity):
                 flux_e *= scale_factor
                 
                 # Clamp fluxes to be safe
-                flux_n = np.nan_to_num(flux_n)
-                flux_s = np.nan_to_num(flux_s)
-                flux_w = np.nan_to_num(flux_w)
-                flux_e = np.nan_to_num(flux_e)
+                flux_n = xp.nan_to_num(flux_n)
+                flux_s = xp.nan_to_num(flux_s)
+                flux_w = xp.nan_to_num(flux_w)
+                flux_e = xp.nan_to_num(flux_e)
                 
                 # 3. Water Transport
                 # Calculate inflow from neighbors (Note: Inflow N comes from S neighbor of N-shifted cell)
-                inflow = np.zeros_like(water)
+                inflow = xp.zeros_like(water)
                 
                 # Outflow
                 outflow = flux_n + flux_s + flux_w + flux_e
                 
                 # Inflow logic:
-                # - flux_n flows NORTH. So cell at (y,x) receives from SOUTH neighbor (y+1,x)'s North flux
-                # - Shift flux arrays to calculate inflow
-                
-                # Shifted arrays must match size. 
-                # flux_n (flow to N) -> Shift S to get inflow from S (wait, no. Flux N means flow FROM CURRENT TO N)
-                # So inflow FROM S is flux_n of the S neighbor.
-                
-                # Pad fluxes to shift them back
-                pad_Fn = np.pad(flux_n, ((1,1),(0,0)), mode='constant')
-                pad_Fs = np.pad(flux_s, ((1,1),(0,0)), mode='constant')
-                pad_Fw = np.pad(flux_w, ((0,0),(1,1)), mode='constant')
-                pad_Fe = np.pad(flux_e, ((0,0),(1,1)), mode='constant')
+                pad_Fn = xp.pad(flux_n, ((1,1),(0,0)), mode='constant')
+                pad_Fs = xp.pad(flux_s, ((1,1),(0,0)), mode='constant')
+                pad_Fw = xp.pad(flux_w, ((0,0),(1,1)), mode='constant')
+                pad_Fe = xp.pad(flux_e, ((0,0),(1,1)), mode='constant')
                 
                 in_n = pad_Fs[:-2, :] # Flux S from N neighbor
                 in_s = pad_Fn[2:, :]  # Flux N from S neighbor
@@ -682,15 +695,8 @@ class FilterEntity(Entity):
                 
                 # 4. Erosion / Deposition
                 # Velocity estimation based on total flux
-                # V = Flux / Water depth
-                # Dividing by depth ensures that deep water (lakes) has low velocity -> low erosion
-                # This prevents "pitting" or "holes" in sinks.
-                
-                # Average flux passing through cell
                 flux_avg = (inflow + outflow) * 0.5
                 
-                # Velocity = Flux / Depth
-                # Add 1.0 to depth to prevent singularity on dry land and limit max velocity on thin films
                 velocity = flux_avg / (water + 1.0)
                 
                 # Sediment Capacity
@@ -700,19 +706,12 @@ class FilterEntity(Entity):
                 diff = capacity - sediment
                 
                 # Erode (add to sediment, remove from terrain)
-                # Only if capacity > sediment
-                # Amount limited by erosion rate
-                erode_amt = np.maximum(0, diff * k_erode)
+                erode_amt = xp.maximum(0, diff * k_erode)
                 
                 # Deposit (remove from sediment, add to terrain)
-                # Only if sediment > capacity
-                deposit_amt = np.maximum(0, -diff * k_dep)
-                
-                # Modification
-                # Don't erode more than available height? (optional simple check)
+                deposit_amt = xp.maximum(0, -diff * k_dep)
                 
                 # Masking application:
-                # If mask exists, modulate the terrain change
                 change = deposit_amt - erode_amt
                 
                 if mask is not None:
@@ -722,37 +721,27 @@ class FilterEntity(Entity):
                 sediment -= change
                 
                 # 5. Sediment Transport
-                # Move sediment proportional to water flow
-                # Simple advection: sediment moves with water
-                # New sediment = Old Sediment + InflowSed - OutflowSed
-                # Ratio of flux to water volume
-                
-                total_water_safe = np.maximum(water, 1e-6)
+                total_water_safe = xp.maximum(water, 1e-6)
                 
                 # Ratio of water leaving in each direction
-                # Ensure these sum <= 1.0 (they should if flux was scaled)
                 r_n = flux_n / total_water_safe
                 r_s = flux_s / total_water_safe
                 r_w = flux_w / total_water_safe
                 r_e = flux_e / total_water_safe
                 
                 # Sanity check ratios
-                r_n = np.clip(np.nan_to_num(r_n), 0, 1)
-                r_s = np.clip(np.nan_to_num(r_s), 0, 1)
-                r_w = np.clip(np.nan_to_num(r_w), 0, 1)
-                r_e = np.clip(np.nan_to_num(r_e), 0, 1)
+                r_n = xp.clip(xp.nan_to_num(r_n), 0, 1)
+                r_s = xp.clip(xp.nan_to_num(r_s), 0, 1)
+                r_w = xp.clip(xp.nan_to_num(r_w), 0, 1)
+                r_e = xp.clip(xp.nan_to_num(r_e), 0, 1)
                 
                 # Clamp sediment before multiplication to avoid overflow
-                np.clip(sediment, 0, 1000.0, out=sediment)
+                xp.clip(sediment, 0, 1000.0, out=sediment)
                 
                 sem_out = sediment * (r_n + r_s + r_w + r_e)
                 
                 # Inflow calculation similar to water
-                # Sediment leaving neighbors flow into this cell
-                
-                pad_sem = np.pad(sediment, 1, mode='constant')
-                # Wait, we need "sediment leaving N neighbor towards S"
-                # This is (sediment_N * r_s_N)
+                pad_sem = xp.pad(sediment, 1, mode='constant')
                 
                 # Precalc Outflow Sediment per direction
                 s_out_n = sediment * r_n
@@ -760,10 +749,10 @@ class FilterEntity(Entity):
                 s_out_w = sediment * r_w
                 s_out_e = sediment * r_e
                 
-                pad_Son = np.pad(s_out_n, ((1,1),(0,0)), mode='constant')
-                pad_Sos = np.pad(s_out_s, ((1,1),(0,0)), mode='constant')
-                pad_Sow = np.pad(s_out_w, ((0,0),(1,1)), mode='constant')
-                pad_Soe = np.pad(s_out_e, ((0,0),(1,1)), mode='constant')
+                pad_Son = xp.pad(s_out_n, ((1,1),(0,0)), mode='constant')
+                pad_Sos = xp.pad(s_out_s, ((1,1),(0,0)), mode='constant')
+                pad_Sow = xp.pad(s_out_w, ((0,0),(1,1)), mode='constant')
+                pad_Soe = xp.pad(s_out_e, ((0,0),(1,1)), mode='constant')
                 
                 s_in_n = pad_Sos[:-2, :] # S coming from N neighbor (its South flow)
                 s_in_s = pad_Son[2:, :]  # S coming from S neighbor (its North flow)
@@ -775,22 +764,20 @@ class FilterEntity(Entity):
                 sediment += (sem_in - sem_out)
                 
                 # Stability Check for Sediment
-                if np.any(np.isnan(sediment)) or np.any(np.isinf(sediment)):
-                    sediment = np.nan_to_num(sediment)
+                if xp.any(xp.isnan(sediment)) or xp.any(xp.isinf(sediment)):
+                    sediment = xp.nan_to_num(sediment)
                 
                 # Clamp again - Tight bounds to prevent spikes
-                np.clip(sediment, 0, 5.0, out=sediment)
+                xp.clip(sediment, 0, 5.0, out=sediment)
                 
                 # 6. Evaporation
                 water *= (1.0 - k_evap)
                 
                 # Stability Check for Water
-                if np.any(np.isnan(water)) or np.any(np.isinf(water)):
-                    water = np.nan_to_num(water)
+                if xp.any(xp.isnan(water)) or xp.any(xp.isinf(water)):
+                    water = xp.nan_to_num(water)
             
-            # Final Step: DO NOT deposit remaining suspended sediment.
-            # If it hasn't settled by now, it flows away.
-            # Adding it causes massive spikes if the simulation is unstable.
+            # Final Step: Pass (discard sediment)
             pass
             
         elif f_type == "Thermal":
@@ -802,11 +789,11 @@ class FilterEntity(Entity):
             # Convert degrees to slope threshold (dy/dx)
             # Assuming dx=1 for simplicity, or we can use terrain_size if needed.
             # Using pixel-space gradient for now
-            talus_threshold = np.tan(np.radians(talus_deg))
+            talus_threshold = xp.tan(xp.radians(talus_deg))
             
             for _ in range(iterations):
                 # Calculate gradients to neighbors (N, S, E, W)
-                padded = np.pad(heightmap, 1, mode='edge')
+                padded = xp.pad(heightmap, 1, mode='edge')
                 
                 # Diff: neighbor - current (negative means neighbor is lower)
                 # actually we want current - neighbor (force towards neighbor)
@@ -819,10 +806,10 @@ class FilterEntity(Entity):
                 # Identify where slope > threshold
                 # Only move if d > talus_threshold
                 
-                move_n = np.maximum(0, d_n - talus_threshold)
-                move_s = np.maximum(0, d_s - talus_threshold)
-                move_w = np.maximum(0, d_w - talus_threshold)
-                move_e = np.maximum(0, d_e - talus_threshold)
+                move_n = xp.maximum(0, d_n - talus_threshold)
+                move_s = xp.maximum(0, d_s - talus_threshold)
+                move_w = xp.maximum(0, d_w - talus_threshold)
+                move_e = xp.maximum(0, d_e - talus_threshold)
                 
                 # Total material to move
                 total_move = move_n + move_s + move_w + move_e
@@ -850,17 +837,13 @@ class FilterEntity(Entity):
                 # Update neighbors (gain material)
                 # Vectorized inflow accumulation
                 
-                pad_On = np.pad(out_n, ((1,1),(0,0)), mode='constant')
-                pad_Os = np.pad(out_s, ((1,1),(0,0)), mode='constant')
-                pad_Ow = np.pad(out_w, ((0,0),(1,1)), mode='constant')
-                pad_Oe = np.pad(out_e, ((0,0),(1,1)), mode='constant')
+                pad_On = xp.pad(out_n, ((1,1),(0,0)), mode='constant')
+                pad_Os = xp.pad(out_s, ((1,1),(0,0)), mode='constant')
+                pad_Ow = xp.pad(out_w, ((0,0),(1,1)), mode='constant')
+                pad_Oe = xp.pad(out_e, ((0,0),(1,1)), mode='constant')
                 
                 # Inflow logic:
                 # inflow from N neighbor comes from his South flow (move_s of N)
-                # Wait:
-                # d_n was (current - north_neighbor). 
-                # out_n is material moving TO North.
-                # So inflow FROM South neighbor is out_n of the SOUTH neighbor.
                 
                 in_n = pad_Os[:-2, :] # Material coming FROM North neighbor (its South flow)
                 in_s = pad_On[2:, :]  # FROM South (its North flow)
@@ -870,18 +853,11 @@ class FilterEntity(Entity):
                 change += (in_n + in_s + in_w + in_e)
                 
                 # Stability Check
-                if np.any(np.isnan(change)) or np.any(np.isinf(change)):
-                    change = np.nan_to_num(change)
+                if xp.any(xp.isnan(change)) or xp.any(xp.isinf(change)):
+                    change = xp.nan_to_num(change)
                 
                 # Clamp Thermal Change
-                np.clip(change, -100.0, 100.0, out=change)
-                
-                # Stability Check
-                if np.any(np.isnan(change)) or np.any(np.isinf(change)):
-                    change = np.nan_to_num(change)
-                
-                # Clamp change to avoid explosion
-                np.clip(change, -100.0, 100.0, out=change)
+                xp.clip(change, -100.0, 100.0, out=change)
                 
                 if mask is not None:
                     heightmap[:] += change * mask
@@ -889,27 +865,31 @@ class FilterEntity(Entity):
                     heightmap[:] += change
 
         elif f_type == "Smooth":
-            from scipy.ndimage import gaussian_filter
             sigma = self.get_property("Smooth Sigma")
+            # Apply Gaussian Filter (using backend ndimage)
+            smoothed = ndimage.gaussian_filter(heightmap, sigma=sigma)
+            
             if mask is not None:
-                smoothed = gaussian_filter(heightmap, sigma=sigma)
                 heightmap[:] = heightmap * (1.0 - mask) + smoothed * mask
             else:
-                heightmap[:] = gaussian_filter(heightmap, sigma=sigma)
+                heightmap[:] = smoothed
         
         elif f_type == "Sharpen":
-            from scipy.ndimage import gaussian_filter
             # Unsharp mask
             sigma = self.get_property("Sharpen Sigma")
             strength = self.get_property("Sharpen Strength")
             
-            smoothed = gaussian_filter(heightmap, sigma=sigma)
-            detail = (heightmap - smoothed) * strength
+            # Blurred version
+            blurred = ndimage.gaussian_filter(heightmap, sigma=sigma)
+            
+            # Unsharp mask: Original + (Original - Blurred) * Strength
+            mask_detail = heightmap - blurred
+            sharpened = heightmap + mask_detail * strength
             
             if mask is not None:
-                heightmap[:] += detail * mask
+                heightmap[:] = heightmap * (1.0 - mask) + sharpened * mask
             else:
-                heightmap[:] += detail
+                heightmap[:] = sharpened
         
         elif f_type == "Distort by Noise":
             from src.filters.terrain_filters import DistortByNoiseFilter
@@ -1075,7 +1055,7 @@ class MaskEntity(Entity):
         # terrain_size is physical width
         pixels_per_unit = w / terrain_size
         
-        mask = np.zeros(shape, dtype=np.float32)
+        mask = xp.zeros(shape, dtype=xp.float32)
 
         # --- GENERATION ---
         if m_type == "Primitive":
@@ -1089,17 +1069,19 @@ class MaskEntity(Entity):
             cx = w//2 + x_px
             cy = h//2 + y_px
             
-            y, x = np.ogrid[:h, :w]
+            # Generate grid on device
+            y = xp.arange(h).reshape(-1, 1)
+            x = xp.arange(w).reshape(1, -1)
             
             if shape_type == "Circle":
                 dist_sq = (x - cx)**2 + (y - cy)**2
                 radius_sq = (size_px/2)**2
                 # Simple hard edge
-                mask = (dist_sq <= radius_sq).astype(np.float32)
+                mask = (dist_sq <= radius_sq).astype(xp.float32)
                 
             elif shape_type == "Square":
                 half_size = size_px / 2
-                mask = ((np.abs(x - cx) <= half_size) & (np.abs(y - cy) <= half_size)).astype(np.float32)
+                mask = ((xp.abs(x - cx) <= half_size) & (xp.abs(y - cy) <= half_size)).astype(xp.float32)
                 
         elif m_type == "Image":
             path = self.get_property("Image Path")
@@ -1108,7 +1090,7 @@ class MaskEntity(Entity):
                     img = Image.open(path).convert('L') # Grayscale
                     img = img.resize((w, h))
                     img_data = np.array(img, dtype=np.float32) / 255.0
-                    mask = img_data
+                    mask = to_device(img_data)
                 except Exception as e:
                     print(f"Error loading mask image: {e}")
 
@@ -1124,7 +1106,10 @@ class MaskEntity(Entity):
             # Needed for slope/curvature scaling
             dx = terrain_size / w if w > 0 else 1.0
             
-            feature_map = np.zeros_like(hm_data)
+            # Ensure hm_data is on device
+            hm_data = to_device(hm_data)
+            
+            feature_map = xp.zeros_like(hm_data)
             
             if f_type == "Height":
                 feature_map = hm_data
@@ -1132,18 +1117,18 @@ class MaskEntity(Entity):
             elif f_type == "Slope":
                 # Gradient magnitude
                 # Scale by 1/dx to get dy/dx
-                gy, gx = np.gradient(hm_data, dx) 
-                slope = np.sqrt(gx**2 + gy**2)
+                # xp.gradient returns a list of arrays (gradient along each axis)
+                grads = xp.gradient(hm_data, dx)
+                gy, gx = grads[0], grads[1]
+                slope = xp.sqrt(gx**2 + gy**2)
                 feature_map = slope
                 
             elif f_type == "Curvature":
                 # Laplacian
-                # Scale by 1/dx^2
-                curvature = laplace(hm_data) / (dx**2)
-                feature_map = curvature
+                feature_map = ndimage.laplace(hm_data) / (dx**2)
             
             # Thresholding
-            mask = ((feature_map >= min_v) & (feature_map <= max_v)).astype(np.float32)
+            mask = ((feature_map >= min_v) & (feature_map <= max_v)).astype(xp.float32)
             
         # --- POST PROCESSING ---
         
@@ -1151,7 +1136,7 @@ class MaskEntity(Entity):
         blur_amt_phys = self.get_property("Blur")
         if blur_amt_phys > 0:
             sigma = blur_amt_phys * pixels_per_unit
-            mask = gaussian_filter(mask, sigma=sigma)
+            mask = ndimage.gaussian_filter(mask, sigma=sigma)
             
         # 2. Invert
         if self.get_property("Invert"):
