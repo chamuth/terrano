@@ -14,9 +14,11 @@ class EntityType(Enum):
 
 class Entity(QObject):
     # Signal when properties change so Inspector/Viewport can update
+    # Signal when properties change so Inspector/Viewport can update
     changed = pyqtSignal()
     renamed = pyqtSignal() # Signal specifically for renaming (no recompute needed)
     structure_changed = pyqtSignal() # When children are added/removed
+    status_changed = pyqtSignal(object) # Emit self when is_dirty changes
 
     def __init__(self, name="Entity", parent=None, entity_type=EntityType.ROOT):
         super().__init__()
@@ -38,6 +40,55 @@ class Entity(QObject):
 
         if parent:
             self.set_parent(parent)
+            
+        # Caching
+        self.is_dirty = True
+        self._cached_output = None
+        self.last_input_version = None
+        self.cache_dir = os.path.join(os.getcwd(), ".cache")
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir, exist_ok=True)
+            
+    def set_cache_dir(self, directory, recursive=True):
+        """Update cache directory (e.g. when project is saved/loaded)"""
+        self.cache_dir = directory
+        if not os.path.exists(self.cache_dir):
+             os.makedirs(self.cache_dir, exist_ok=True)
+             
+        if recursive:
+            for child in self._children:
+                child.set_cache_dir(directory, recursive=True)
+            
+    def mark_dirty(self):
+        # Always emit changed because properties changed
+        self.changed.emit()
+        
+        if self.is_dirty:
+            return
+            
+        self.is_dirty = True
+        self.status_changed.emit(self)
+        
+        if self._parent:
+            self._parent.mark_dirty()
+        
+    def get_cache_path(self):
+        return os.path.join(self.cache_dir, f"{self.id}.npy")
+
+    def save_cache(self, data):
+        try:
+            np.save(self.get_cache_path(), data)
+        except Exception as e:
+            print(f"Failed to save cache for {self.name}: {e}")
+
+    def load_cache(self):
+        path = self.get_cache_path()
+        if os.path.exists(path):
+            try:
+                return np.load(path)
+            except:
+                return None
+        return None
             
     @property
     def name(self):
@@ -66,37 +117,95 @@ class Entity(QObject):
             else:
                 self._children.append(child)
             child._parent = self
+            
+            try:
+                child.changed.connect(self.on_child_changed)
+                child.structure_changed.connect(self.on_child_structure_changed)
+            except:
+                pass
+                
+            # Propagate cache dir
+            child.set_cache_dir(self.cache_dir, recursive=True)
+            
+            self.mark_dirty()
             self.structure_changed.emit()
             
     def remove_child(self, child):
         if child in self._children:
+            # Disconnect bubbling
+            try:
+                child.changed.disconnect(self.on_child_changed)
+                child.structure_changed.disconnect(self.on_child_structure_changed)
+            except:
+                pass
+
             self._children.remove(child)
             child._parent = None
+            self.mark_dirty()
             self.structure_changed.emit()
+
+    def on_child_changed(self):
+        self.mark_dirty()
+
+    def on_child_structure_changed(self):
+        # Bubble up structure changes
+        self.structure_changed.emit()
 
     def get_children(self):
         return self._children
 
-    def process(self, heightmap, mask=None, terrain_size=1000.0):
+    def process(self, input_heightmap, mask=None, terrain_size=1000.0, input_version=None):
         """
         Recursive processing pipeline.
-        heightmap: The shared heightmap array (modified in-place).
-        mask: The current scoped mask (0.0 - 1.0). None implies 1.0 everywhere.
-        terrain_size: Physical size of the terrain (for scale-independent generation)
+        input_heightmap: Input array (READ ONLY ideally, or copy).
+        mask: The current scoped mask.
+        terrain_size: Physical size.
+        input_version: Unique ID of the input data state.
+        Returns: (output_heightmap, output_version)
         """
-        # Check property instead of private flag
         if not self.get_property("Enabled"):
-            return
+            # Pass through input
+            return input_heightmap, input_version
 
-        # 1. Apply Self Logic
-        self.on_process(heightmap, mask, terrain_size)
+        # 1. Caching Check
+        if not self.is_dirty and input_version is not None and input_version == self.last_input_version:
+            if self._cached_output is not None:
+                return self._cached_output, self.id
+            
+            loaded = self.load_cache()
+            if loaded is not None:
+                self._cached_output = loaded
+                return loaded, self.id
+
+        # 2. Process
+        # Copy input to avoid mutating ancestor's buffer
+        current_heightmap = input_heightmap.copy() if input_heightmap is not None else None
         
-        # 2. Process Children
-        # If we are a Mask, we handle children differently (scoped)
+        # Self Logic
+        self.on_process(current_heightmap, mask, terrain_size)
+        
+        # Children Logic
+        # We generate a strict version ID for the flow between children
+        current_version = str(uuid.uuid4())
+        
         if self.entity_type != EntityType.MASK:
             for child in self._children:
-                child.process(heightmap, mask, terrain_size)
+                current_heightmap, current_version = child.process(current_heightmap, mask, terrain_size, current_version)
                 
+        # 3. Update Cache
+        self._cached_output = current_heightmap
+        self.last_input_version = input_version
+        
+        if self.is_dirty:
+            self.is_dirty = False
+            self.status_changed.emit(self) # Notify UI we are clean
+            
+        self.save_cache(current_heightmap)
+        
+        # Our output version is roughly our ID + input_version? 
+        # Or just a new unique ID since we just recomputed.
+        return current_heightmap, str(uuid.uuid4())
+
     def on_process(self, heightmap, mask, terrain_size):
         pass
 
@@ -116,7 +225,9 @@ class Entity(QObject):
             # Type safety check could go here
             self.properties[name]["value"] = value
             self.on_property_changed(name, value)
-            self.changed.emit()
+
+            self.mark_dirty()
+            # self.changed.emit() # mark_dirty emits changed
             
     def set_property_visible(self, name, visible):
         if name in self.properties:
@@ -206,7 +317,8 @@ class GeneratorEntity(Entity):
         if name == "Type":
             self.update_property_visibility()
         # Mark dirty on any property change
-        self.changed.emit()
+
+        self.mark_dirty()
 
     def update_property_visibility(self):
         gen_type = self.get_property("Type")
@@ -404,7 +516,7 @@ class FilterEntity(Entity):
     def on_property_changed(self, name, value):
         if name == "Type":
             self.update_visibility()
-        self.changed.emit()
+        self.mark_dirty()
 
     def update_visibility(self):
         f_type = self.get_property("Type")
@@ -626,22 +738,53 @@ class MaskEntity(Entity):
         self.set_property_visible("Max Val", show_feat)
         self.set_property_visible("Ramp", show_feat)
 
-    def process(self, heightmap, parent_mask=None, terrain_size=1000.0):
+    def process(self, input_heightmap, parent_mask=None, terrain_size=1000.0, input_version=None):
         if not self.get_property("Enabled"):
-            return
-
-        # 1. Generate local mask 
-        # Pass heightmap for Feature masks
-        local_mask = self.generate_mask(heightmap, terrain_size)
+             return input_heightmap, input_version
+             
+        # Mask process is slightly different:
+        # It doesn't cache the *heightmap* result of itself (since it doesn't modify it),
+        # but it caches the result of its children?
+        # Actually, MaskEntity behaves like a pass-through that modifies the MASK context for children.
+        # But if we want to cache the result of the *entire mask branch*, we should handle it same as Entity.
         
-        # 2. Combine with parent mask
+        # 1. Caching Check
+        if not self.is_dirty and input_version is not None and input_version == self.last_input_version:
+             if self._cached_output is not None:
+                 return self._cached_output, self.id
+             loaded = self.load_cache()
+             if loaded is not None:
+                 self._cached_output = loaded
+                 return loaded, self.id
+
+        # 2. Compute
+        current_heightmap = input_heightmap.copy() if input_heightmap is not None else None
+        
+        # Generate local mask
+        local_mask = self.generate_mask(current_heightmap, terrain_size)
+        
+        # Combine with parent mask
         effective_mask = local_mask
         if parent_mask is not None:
             effective_mask = local_mask * parent_mask
             
-        # 3. Process children with this NEW mask
+        current_version = str(uuid.uuid4())
+            
+        # Process children with this NEW mask
         for child in self._children:
-            child.process(heightmap, effective_mask, terrain_size)
+            current_heightmap, current_version = child.process(current_heightmap, effective_mask, terrain_size, current_version)
+            
+        # 3. Update Cache
+        self._cached_output = current_heightmap
+        self.last_input_version = input_version
+        
+        if self.is_dirty:
+            self.is_dirty = False
+            self.status_changed.emit(self)
+            
+        self.save_cache(current_heightmap)
+        
+        return current_heightmap, str(uuid.uuid4())
             
     def generate_mask(self, heightmap, terrain_size):
         # Allow passing shape tuple or full heightmap array
@@ -654,24 +797,34 @@ class MaskEntity(Entity):
 
         m_type = self.get_property("Type")
         h, w = shape
+        # Calculate pixels per unit (assuming square pixels)
+        # terrain_size is physical width
+        pixels_per_unit = w / terrain_size
+        
         mask = np.zeros(shape, dtype=np.float32)
 
         # --- GENERATION ---
         if m_type == "Primitive":
             shape_type = self.get_property("Primitive Shape")
-            size = self.get_property("Size")
-            cx = w//2 + self.get_property("X")
-            cy = h//2 + self.get_property("Y")
+            
+            # Scale properties from physical to pixels
+            size_px = self.get_property("Size") * pixels_per_unit
+            x_px = self.get_property("X") * pixels_per_unit
+            y_px = self.get_property("Y") * pixels_per_unit
+            
+            cx = w//2 + x_px
+            cy = h//2 + y_px
             
             y, x = np.ogrid[:h, :w]
             
             if shape_type == "Circle":
                 dist_sq = (x - cx)**2 + (y - cy)**2
-                radius_sq = (size/2)**2
+                radius_sq = (size_px/2)**2
+                # Simple hard edge
                 mask = (dist_sq <= radius_sq).astype(np.float32)
                 
             elif shape_type == "Square":
-                half_size = size / 2
+                half_size = size_px / 2
                 mask = ((np.abs(x - cx) <= half_size) & (np.abs(y - cy) <= half_size)).astype(np.float32)
                 
         elif m_type == "Image":
@@ -694,6 +847,9 @@ class MaskEntity(Entity):
             min_v = self.get_property("Min Val")
             max_v = self.get_property("Max Val")
             
+            # Needed for slope/curvature scaling
+            dx = terrain_size / w if w > 0 else 1.0
+            
             feature_map = np.zeros_like(hm_data)
             
             if f_type == "Height":
@@ -701,13 +857,15 @@ class MaskEntity(Entity):
                 
             elif f_type == "Slope":
                 # Gradient magnitude
-                gy, gx = np.gradient(hm_data)
+                # Scale by 1/dx to get dy/dx
+                gy, gx = np.gradient(hm_data, dx) 
                 slope = np.sqrt(gx**2 + gy**2)
                 feature_map = slope
                 
             elif f_type == "Curvature":
                 # Laplacian
-                curvature = laplace(hm_data)
+                # Scale by 1/dx^2
+                curvature = laplace(hm_data) / (dx**2)
                 feature_map = curvature
             
             # Thresholding
@@ -715,10 +873,11 @@ class MaskEntity(Entity):
             
         # --- POST PROCESSING ---
         
-        # 1. Blur
-        blur_amt = self.get_property("Blur")
-        if blur_amt > 0:
-            mask = gaussian_filter(mask, sigma=blur_amt)
+        # 1. Blur (Physical units)
+        blur_amt_phys = self.get_property("Blur")
+        if blur_amt_phys > 0:
+            sigma = blur_amt_phys * pixels_per_unit
+            mask = gaussian_filter(mask, sigma=sigma)
             
         # 2. Invert
         if self.get_property("Invert"):

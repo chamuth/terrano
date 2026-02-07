@@ -23,10 +23,11 @@ class TerrainWorker(QThread):
             if phys_size is None or phys_size <= 0: phys_size = 1000.0
             
             # Create empty heightmap
-            heightmap = np.zeros((size, size), dtype=np.float32)
+            initial_heightmap = np.zeros((size, size), dtype=np.float32)
             
             # Process terrain (this is the heavy computation)
-            self.terrain_entity.process(heightmap, terrain_size=phys_size)
+            # New functional signature with caching
+            heightmap, _ = self.terrain_entity.process(initial_heightmap, terrain_size=phys_size, input_version="ROOT")
             
             # Emit result if not cancelled
             if not self.should_stop:

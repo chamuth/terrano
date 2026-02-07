@@ -1,9 +1,9 @@
 from PyQt6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QMenu, QWidget, QVBoxLayout, 
                              QToolBar, QAbstractItemView)
-from PyQt6.QtGui import QAction, QIcon, QBrush, QShortcut, QKeySequence
+from PyQt6.QtGui import QAction, QIcon, QBrush, QShortcut, QKeySequence, QPixmap, QPainter, QColor
 from PyQt6.QtCore import Qt
 from src.core.scene import TerrainEntity, FilterEntity, MaskEntity, GeneratorEntity, EntityType
-from src.core.commands import AddEntityCommand, RemoveEntityCommand, MoveEntityCommand, RenameEntityCommand
+from src.core.commands import AddEntityCommand, RemoveEntityCommand, MoveEntityCommand, RenameEntityCommand, PropertyChangeCommand
 
 class HierarchyPanel(QWidget):
     def __init__(self, root_entity, undo_stack, parent=None):
@@ -111,11 +111,13 @@ class HierarchyPanel(QWidget):
             entity.changed.disconnect(self.on_entity_changed)
             entity.renamed.disconnect(self.on_entity_renamed)
             entity.structure_changed.disconnect(self.refresh_tree)
+            entity.status_changed.disconnect(self.on_entity_status_changed)
         except:
             pass
         entity.changed.connect(self.on_entity_changed)
         entity.renamed.connect(self.on_entity_renamed)
         entity.structure_changed.connect(self.refresh_tree)
+        entity.status_changed.connect(self.on_entity_status_changed)
         
         parent_item.addChild(item)
         
@@ -128,12 +130,36 @@ class HierarchyPanel(QWidget):
     def update_item_style(self, item, entity):
         is_enabled = entity.get_property("Enabled")
         
+        # Status Icon
+        item.setIcon(0, self.get_status_icon(entity.is_dirty))
+        
         if is_enabled:
             # Default color (None resets to theme default)
             item.setForeground(0, QBrush()) 
         else:
             # Grayed out
             item.setForeground(0, QBrush(Qt.GlobalColor.gray))
+
+    def get_status_icon(self, is_dirty):
+        pixmap = QPixmap(10, 10)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        color = QColor("yellow") if is_dirty else QColor("#00FF00") # Bright Green
+        painter.setBrush(QBrush(color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        # Draw small circle
+        painter.drawEllipse(1, 1, 8, 8)
+        painter.end()
+        return QIcon(pixmap)
+
+    def on_entity_status_changed(self, entity):
+        if not entity: return
+        
+        if entity.id in self.items_map:
+            item = self.items_map[entity.id]
+            self.update_item_style(item, entity)
 
     def get_entity_from_item(self, item):
         if not item: return None
@@ -449,10 +475,9 @@ class HierarchyPanel(QWidget):
         
         if action == toggle_action:
             new_state = not is_enabled
-            entity.set_property("Enabled", new_state)
-            # Update visual style immediately (though changed signal might trigger full refresh)
-            self.update_item_style(item, entity)
-            # Also trigger main window update handled by entity.changed signal
+            cmd = PropertyChangeCommand(entity, "Enabled", new_state)
+            self.undo_stack.push(cmd)
+            # Visual update handled by on_entity_changed signal which PropertyChangeCommand triggers via set_property
         
         elif action == del_action:
             if entity != self.root_entity:

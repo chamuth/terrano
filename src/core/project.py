@@ -39,6 +39,12 @@ class ProjectManager:
             self.current_project_path = folder_path
             self.project_name = project_name
             self.is_dirty = False
+            
+            # Update Cache Directory for all entities
+            cache_dir = os.path.join(folder_path, ".cache")
+            if root_entity:
+                root_entity.set_cache_dir(cache_dir, recursive=True)
+                
             return True, "Project saved successfully."
             
         except Exception as e:
@@ -59,8 +65,14 @@ class ProjectManager:
             # Folder is dirname of file
             self.current_project_path = os.path.dirname(file_path)
             # Project name is filename no ext
+            # Project name is filename no ext
             self.project_name = os.path.splitext(os.path.basename(file_path))[0]
             self.is_dirty = False
+            
+            # Update Cache Directory
+            cache_dir = os.path.join(self.current_project_path, ".cache")
+            if root_entity:
+                root_entity.set_cache_dir(cache_dir, recursive=True)
             
             return root_entity, "Project loaded."
             
