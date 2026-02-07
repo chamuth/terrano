@@ -2,26 +2,28 @@
 import numpy as np
 from scipy.ndimage import zoom
 
-def generate_perlin_noise_2d_fast(shape, scale=100.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=0, terrain_size=1000.0):
+def generate_perlin_noise_2d_fast(shape, scale=100.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=0, terrain_size=1000.0, style="Standard"):
     """
     Fast Perlin-like noise using scipy interpolation.
-    Much faster than pixel-by-pixel approach.
+    Styles: Standard, Billowy, Ridged, Plateau
     """
     np.random.seed(seed)
     
     height, width = shape
     noise = np.zeros(shape, dtype=np.float32)
+    max_amp = 0.0
     
     for octave in range(octaves):
         freq = lacunarity ** octave
         amp = persistence ** octave
+        max_amp += amp
         
-        # Generate small random grid for this octave
-        # Generate small random grid for this octave
-        # Grid density depends on physical size, not pixel resolution
-        # density = terrain_size / (scale / freq)
-        
-        density = max(4, int(terrain_size / (scale / freq)))
+        # Calculate grid density based on physical unit scaling
+        # Avoid division by zero
+        wavelength = scale / freq if freq > 0 else scale
+        if wavelength < 0.001: wavelength = 0.001
+            
+        density = max(4, int(terrain_size / wavelength))
         grid = np.random.randn(density, density).astype(np.float32)
         
         # Upsample to full resolution using smooth interpolation
@@ -31,7 +33,20 @@ def generate_perlin_noise_2d_fast(shape, scale=100.0, octaves=6, persistence=0.5
         # Ensure exact size
         octave_noise = octave_noise[:height, :width]
         
+        # Apply Style
+        if style == "Billowy":
+            octave_noise = np.abs(octave_noise) * 2.0 - 1.0 
+        elif style == "Ridged":
+            octave_noise = 1.0 - np.abs(octave_noise)
+            octave_noise = octave_noise * 2.0 - 1.0
+        elif style == "Plateau":
+             octave_noise = np.clip(octave_noise * 2.0, -1.0, 1.0)
+             
         noise += octave_noise * amp
+        
+    # Normalize result roughly to -1..1
+    if max_amp > 0:
+        noise /= max_amp
     
     return noise
 
@@ -39,13 +54,14 @@ def generate_perlin_noise_2d_fast(shape, scale=100.0, octaves=6, persistence=0.5
 class PerlinNoiseGenerator:
     """Fast Perlin noise generator using scipy zoom interpolation"""
     
-    def __init__(self, scale=100.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=0, amplitude=50.0):
+    def __init__(self, scale=100.0, octaves=6, persistence=0.5, lacunarity=2.0, seed=0, amplitude=50.0, style="Standard"):
         self.scale = scale
         self.octaves = octaves
         self.persistence = persistence
         self.lacunarity = lacunarity
         self.seed = seed
         self.amplitude = amplitude
+        self.style = style
     
     def generate(self, size, terrain_size=1000.0):
         """Generate Perlin noise heightmap"""
@@ -56,7 +72,8 @@ class PerlinNoiseGenerator:
             persistence=self.persistence,
             lacunarity=self.lacunarity,
             seed=self.seed,
-            terrain_size=terrain_size
+            terrain_size=terrain_size,
+            style=self.style
         )
         
         # Scale to desired amplitude

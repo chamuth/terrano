@@ -283,6 +283,7 @@ class GeneratorEntity(Entity):
         self.define_property("Octaves", int, 6, 1, 12, group="Fractal Settings")
         self.define_property("Persistence", float, 0.5, 0.0, 1.0, group="Fractal Settings")
         self.define_property("Lacunarity", float, 2.0, 1.0, 4.0, group="Fractal Settings")
+        self.define_property("Perlin Style", str, "Standard", options=["Standard", "Billowy", "Ridged", "Plateau"], group="Fractal Settings")
         self.define_property("Amplitude", float, 50.0, 0.0, 1000.0, group="General")
         self.define_property("Seed", int, 42, 0, 99999, group="General")
         self.define_property("Height Offset", float, 0.0, -500.0, 500.0, group="General")
@@ -336,6 +337,8 @@ class GeneratorEntity(Entity):
         self.set_property_visible("Octaves", is_fractal)
         self.set_property_visible("Persistence", is_fractal)
         self.set_property_visible("Lacunarity", is_fractal)
+        # Style only for Perlin
+        self.set_property_visible("Perlin Style", gen_type == "Perlin Noise")
         
         # Gabor
         is_gabor = gen_type == "Gabor Noise"
@@ -380,8 +383,9 @@ class GeneratorEntity(Entity):
             seed = self.get_property("Seed")
             amp = self.get_property("Amplitude")
             offset = self.get_property("Height Offset")
+            style = self.get_property("Perlin Style")
             
-            gen = PerlinNoiseGenerator(scale, octaves, pers, lac, seed, amp)
+            gen = PerlinNoiseGenerator(scale, octaves, pers, lac, seed, amp, style)
             generated = gen.generate(heightmap.shape[0], terrain_size) + offset
             
         elif gen_type == "Simplex Noise":
@@ -480,12 +484,17 @@ class FilterEntity(Entity):
         ], group="General")
         
         # Hydraulic Erosion
-        self.define_property("H-Iterations", int, 5, 1, 100, group="Hydraulic Erosion")
-        self.define_property("H-Rain Amount", float, 0.1, 0.0, 1.0, group="Hydraulic Erosion")
+        self.define_property("H-Iterations", int, 50, 1, 200, group="Hydraulic Erosion")
+        self.define_property("H-Rain Amount", float, 0.01, 0.0, 1.0, group="Hydraulic Erosion")
+        self.define_property("H-Sediment Capacity", float, 0.05, 0.0, 1.0, group="Hydraulic Erosion")
+        self.define_property("H-Erosion Rate", float, 0.01, 0.0, 1.0, group="Hydraulic Erosion")
+        self.define_property("H-Deposition Rate", float, 0.01, 0.0, 1.0, group="Hydraulic Erosion")
+        self.define_property("H-Evaporation Rate", float, 0.02, 0.0, 1.0, group="Hydraulic Erosion")
         
         # Thermal Erosion
         self.define_property("T-Iterations", int, 10, 1, 100, group="Thermal Erosion")
         self.define_property("T-Strength", float, 0.5, 0.0, 1.0, group="Thermal Erosion")
+        self.define_property("T-Talus Angle", float, 45.0, 0.0, 90.0, group="Thermal Erosion")
         
         # Smooth / Sharpen
         self.define_property("Smooth Sigma", float, 2.0, 0.1, 10.0, group="Smooth Settings")
@@ -525,11 +534,16 @@ class FilterEntity(Entity):
         is_erosion = (f_type == "Erosion")
         self.set_property_visible("H-Iterations", is_erosion)
         self.set_property_visible("H-Rain Amount", is_erosion)
+        self.set_property_visible("H-Sediment Capacity", is_erosion)
+        self.set_property_visible("H-Erosion Rate", is_erosion)
+        self.set_property_visible("H-Deposition Rate", is_erosion)
+        self.set_property_visible("H-Evaporation Rate", is_erosion)
         
         # Thermal
         is_thermal = (f_type == "Thermal")
         self.set_property_visible("T-Iterations", is_thermal)
         self.set_property_visible("T-Strength", is_thermal)
+        self.set_property_visible("T-Talus Angle", is_thermal)
         
         # Distortion
         is_distort = (f_type == "Distort by Noise")
@@ -565,54 +579,314 @@ class FilterEntity(Entity):
         f_type = self.get_property("Type")
         
         if f_type == "Erosion":
-            # Simplified Grid-Based Erosion (Cellular Automata style)
-            # Faster than particle drops for python
-            rain_amount = self.get_property("H-Rain Amount") * 0.1
+            # Hydraulic Erosion (Pipe Model / Shallow Water)
+            rain_amount = self.get_property("H-Rain Amount")
             passes = self.get_property("H-Iterations")
+            k_cap = self.get_property("H-Sediment Capacity")
+            k_erode = self.get_property("H-Erosion Rate")
+            k_dep = self.get_property("H-Deposition Rate")
+            k_evap = self.get_property("H-Evaporation Rate")
+            
+            # Initialization
+            water = np.zeros_like(heightmap)
+            sediment = np.zeros_like(heightmap)
+            h, w = heightmap.shape
+            
+            # Precompute neighbor offsets for vectorization
+            # N, S, W, E
             
             for _ in range(passes):
-                 padded = np.pad(heightmap, 1, mode='edge')
-                 
-                 # Neighbors
-                 n = padded[:-2, 1:-1]
-                 s = padded[2:, 1:-1]
-                 e = padded[1:-1, 2:]
-                 w = padded[1:-1, :-2]
-                 
-                 # Diff to neighbors (positive means we are higher)
-                 diff_n = heightmap - n
-                 diff_s = heightmap - s
-                 diff_e = heightmap - e
-                 diff_w = heightmap - w
-                 
-                 # Accumulate flow/erosion (only erode if higher)
-                 erode = np.maximum(0, diff_n) + np.maximum(0, diff_s) + \
-                         np.maximum(0, diff_e) + np.maximum(0, diff_w)
-                 
-                 # Apply rain factor
-                 delta = erode * rain_amount
-                 
-                 if mask is not None:
-                     heightmap[:] -= delta * mask
-                 else:
-                     heightmap[:] -= delta
-            
-        elif f_type == "Thermal":
-            # Thermal weathering - Diffusion
-            iterations = self.get_property("T-Iterations")
-            strength = self.get_property("T-Strength") * 0.5
-            
-            from scipy.ndimage import uniform_filter
-            
-            for _ in range(iterations):
-                # Box blur creates diffusion
-                smoothed = uniform_filter(heightmap, size=3)
-                delta = (smoothed - heightmap) * strength
+                # 1. Add Water (Rain)
+                # Normalize water to prevent explosion
+                np.clip(water, 0, 1000.0, out=water)
+                
+                # Only rain on unmasked areas if mask is present, or globally
+                if mask is not None:
+                     water += rain_amount * mask
+                else:
+                     water += rain_amount
+                
+                # 2. Flux Calculation (Outflow)
+                # Height + Water = Total Height
+                total_height = heightmap + water
+                
+                # Calculate diffs
+                # Pad for boundary - Use constant (abyss) to allow drainage!
+                # If we assume terrain is > -1000, using -10000 ensures water flows off
+                padded = np.pad(total_height, 1, mode='constant', constant_values=-10000.0)
+                
+                d_n = total_height - padded[:-2, 1:-1]
+                d_s = total_height - padded[2:, 1:-1]
+                d_w = total_height - padded[1:-1, :-2]
+                d_e = total_height - padded[1:-1, 2:]
+                
+                # Flux (only flow to lower)
+                flux_n = np.maximum(0, d_n)
+                flux_s = np.maximum(0, d_s)
+                flux_w = np.maximum(0, d_w)
+                flux_e = np.maximum(0, d_e)
+                
+                # Normalize flux to prevent negative water
+                flux_sum = flux_n + flux_s + flux_w + flux_e
+                
+                # Avoid div by zero
+                flux_sum_safe = np.maximum(flux_sum, 1e-6)
+                
+                # If sum > water, scale down magnitude
+                # Use a time step factor (dt) for stability? Let's stick to 1.0 but enforce limit
+                scale_factor = np.minimum(1.0, water / flux_sum_safe)
+                
+                # Sanity check scale factor
+                scale_factor = np.nan_to_num(scale_factor)
+                
+                flux_n *= scale_factor
+                flux_s *= scale_factor
+                flux_w *= scale_factor
+                flux_e *= scale_factor
+                
+                # Clamp fluxes to be safe
+                flux_n = np.nan_to_num(flux_n)
+                flux_s = np.nan_to_num(flux_s)
+                flux_w = np.nan_to_num(flux_w)
+                flux_e = np.nan_to_num(flux_e)
+                
+                # 3. Water Transport
+                # Calculate inflow from neighbors (Note: Inflow N comes from S neighbor of N-shifted cell)
+                inflow = np.zeros_like(water)
+                
+                # Outflow
+                outflow = flux_n + flux_s + flux_w + flux_e
+                
+                # Inflow logic:
+                # - flux_n flows NORTH. So cell at (y,x) receives from SOUTH neighbor (y+1,x)'s North flux
+                # - Shift flux arrays to calculate inflow
+                
+                # Shifted arrays must match size. 
+                # flux_n (flow to N) -> Shift S to get inflow from S (wait, no. Flux N means flow FROM CURRENT TO N)
+                # So inflow FROM S is flux_n of the S neighbor.
+                
+                # Pad fluxes to shift them back
+                pad_Fn = np.pad(flux_n, ((1,1),(0,0)), mode='constant')
+                pad_Fs = np.pad(flux_s, ((1,1),(0,0)), mode='constant')
+                pad_Fw = np.pad(flux_w, ((0,0),(1,1)), mode='constant')
+                pad_Fe = np.pad(flux_e, ((0,0),(1,1)), mode='constant')
+                
+                in_n = pad_Fs[:-2, :] # Flux S from N neighbor
+                in_s = pad_Fn[2:, :]  # Flux N from S neighbor
+                in_w = pad_Fe[:, :-2] # Flux E from W neighbor
+                in_e = pad_Fw[:, 2:]  # Flux W from E neighbor
+                
+                inflow = in_n + in_s + in_w + in_e
+                
+                water += (inflow - outflow)
+                
+                # 4. Erosion / Deposition
+                # Velocity estimation based on total flux
+                # V = Flux / Water depth
+                # Dividing by depth ensures that deep water (lakes) has low velocity -> low erosion
+                # This prevents "pitting" or "holes" in sinks.
+                
+                # Average flux passing through cell
+                flux_avg = (inflow + outflow) * 0.5
+                
+                # Velocity = Flux / Depth
+                # Add 1.0 to depth to prevent singularity on dry land and limit max velocity on thin films
+                velocity = flux_avg / (water + 1.0)
+                
+                # Sediment Capacity
+                capacity = k_cap * velocity
+                
+                # Erosion/Deposition
+                diff = capacity - sediment
+                
+                # Erode (add to sediment, remove from terrain)
+                # Only if capacity > sediment
+                # Amount limited by erosion rate
+                erode_amt = np.maximum(0, diff * k_erode)
+                
+                # Deposit (remove from sediment, add to terrain)
+                # Only if sediment > capacity
+                deposit_amt = np.maximum(0, -diff * k_dep)
+                
+                # Modification
+                # Don't erode more than available height? (optional simple check)
+                
+                # Masking application:
+                # If mask exists, modulate the terrain change
+                change = deposit_amt - erode_amt
                 
                 if mask is not None:
-                    heightmap[:] += delta * mask
+                     change *= mask
+                
+                heightmap += change
+                sediment -= change
+                
+                # 5. Sediment Transport
+                # Move sediment proportional to water flow
+                # Simple advection: sediment moves with water
+                # New sediment = Old Sediment + InflowSed - OutflowSed
+                # Ratio of flux to water volume
+                
+                total_water_safe = np.maximum(water, 1e-6)
+                
+                # Ratio of water leaving in each direction
+                # Ensure these sum <= 1.0 (they should if flux was scaled)
+                r_n = flux_n / total_water_safe
+                r_s = flux_s / total_water_safe
+                r_w = flux_w / total_water_safe
+                r_e = flux_e / total_water_safe
+                
+                # Sanity check ratios
+                r_n = np.clip(np.nan_to_num(r_n), 0, 1)
+                r_s = np.clip(np.nan_to_num(r_s), 0, 1)
+                r_w = np.clip(np.nan_to_num(r_w), 0, 1)
+                r_e = np.clip(np.nan_to_num(r_e), 0, 1)
+                
+                # Clamp sediment before multiplication to avoid overflow
+                np.clip(sediment, 0, 1000.0, out=sediment)
+                
+                sem_out = sediment * (r_n + r_s + r_w + r_e)
+                
+                # Inflow calculation similar to water
+                # Sediment leaving neighbors flow into this cell
+                
+                pad_sem = np.pad(sediment, 1, mode='constant')
+                # Wait, we need "sediment leaving N neighbor towards S"
+                # This is (sediment_N * r_s_N)
+                
+                # Precalc Outflow Sediment per direction
+                s_out_n = sediment * r_n
+                s_out_s = sediment * r_s
+                s_out_w = sediment * r_w
+                s_out_e = sediment * r_e
+                
+                pad_Son = np.pad(s_out_n, ((1,1),(0,0)), mode='constant')
+                pad_Sos = np.pad(s_out_s, ((1,1),(0,0)), mode='constant')
+                pad_Sow = np.pad(s_out_w, ((0,0),(1,1)), mode='constant')
+                pad_Soe = np.pad(s_out_e, ((0,0),(1,1)), mode='constant')
+                
+                s_in_n = pad_Sos[:-2, :] # S coming from N neighbor (its South flow)
+                s_in_s = pad_Son[2:, :]  # S coming from S neighbor (its North flow)
+                s_in_w = pad_Soe[:, :-2]
+                s_in_e = pad_Sow[:, 2:]
+                
+                sem_in = s_in_n + s_in_s + s_in_w + s_in_e
+                
+                sediment += (sem_in - sem_out)
+                
+                # Stability Check for Sediment
+                if np.any(np.isnan(sediment)) or np.any(np.isinf(sediment)):
+                    sediment = np.nan_to_num(sediment)
+                
+                # Clamp again - Tight bounds to prevent spikes
+                np.clip(sediment, 0, 5.0, out=sediment)
+                
+                # 6. Evaporation
+                water *= (1.0 - k_evap)
+                
+                # Stability Check for Water
+                if np.any(np.isnan(water)) or np.any(np.isinf(water)):
+                    water = np.nan_to_num(water)
+            
+            # Final Step: DO NOT deposit remaining suspended sediment.
+            # If it hasn't settled by now, it flows away.
+            # Adding it causes massive spikes if the simulation is unstable.
+            pass
+            
+        elif f_type == "Thermal":
+            # Thermal Weathering with Talus Angle
+            iterations = self.get_property("T-Iterations")
+            strength = self.get_property("T-Strength")
+            talus_deg = self.get_property("T-Talus Angle")
+            
+            # Convert degrees to slope threshold (dy/dx)
+            # Assuming dx=1 for simplicity, or we can use terrain_size if needed.
+            # Using pixel-space gradient for now
+            talus_threshold = np.tan(np.radians(talus_deg))
+            
+            for _ in range(iterations):
+                # Calculate gradients to neighbors (N, S, E, W)
+                padded = np.pad(heightmap, 1, mode='edge')
+                
+                # Diff: neighbor - current (negative means neighbor is lower)
+                # actually we want current - neighbor (force towards neighbor)
+                
+                d_n = heightmap - padded[:-2, 1:-1]
+                d_s = heightmap - padded[2:, 1:-1]
+                d_w = heightmap - padded[1:-1, :-2]
+                d_e = heightmap - padded[1:-1, 2:]
+                
+                # Identify where slope > threshold
+                # Only move if d > talus_threshold
+                
+                move_n = np.maximum(0, d_n - talus_threshold)
+                move_s = np.maximum(0, d_s - talus_threshold)
+                move_w = np.maximum(0, d_w - talus_threshold)
+                move_e = np.maximum(0, d_e - talus_threshold)
+                
+                # Total material to move
+                total_move = move_n + move_s + move_w + move_e
+                
+                # Scale by strength and limit (don't move more than diff?)
+                # We distribute the movement.
+                # Factor 0.5 to avoid oscillation (mass conservation stability)
+                # Actually, simpler: amount = diff * strength / 4 (if neighbors > threshold)
+                
+                # Normalize factor to prevent moving more than available excess
+                # We can just use a rate parameter
+                
+                rate = strength * 0.1 # Small steps for stability
+                
+                out_n = move_n * rate
+                out_s = move_s * rate
+                out_w = move_w * rate
+                out_e = move_e * rate
+                
+                total_out = out_n + out_s + out_w + out_e
+                
+                # Update current cell (lose material)
+                change = -total_out
+                
+                # Update neighbors (gain material)
+                # Vectorized inflow accumulation
+                
+                pad_On = np.pad(out_n, ((1,1),(0,0)), mode='constant')
+                pad_Os = np.pad(out_s, ((1,1),(0,0)), mode='constant')
+                pad_Ow = np.pad(out_w, ((0,0),(1,1)), mode='constant')
+                pad_Oe = np.pad(out_e, ((0,0),(1,1)), mode='constant')
+                
+                # Inflow logic:
+                # inflow from N neighbor comes from his South flow (move_s of N)
+                # Wait:
+                # d_n was (current - north_neighbor). 
+                # out_n is material moving TO North.
+                # So inflow FROM South neighbor is out_n of the SOUTH neighbor.
+                
+                in_n = pad_Os[:-2, :] # Material coming FROM North neighbor (its South flow)
+                in_s = pad_On[2:, :]  # FROM South (its North flow)
+                in_w = pad_Oe[:, :-2] # FROM West (its East flow)
+                in_e = pad_Ow[:, 2:]  # FROM East (its West flow)
+                
+                change += (in_n + in_s + in_w + in_e)
+                
+                # Stability Check
+                if np.any(np.isnan(change)) or np.any(np.isinf(change)):
+                    change = np.nan_to_num(change)
+                
+                # Clamp Thermal Change
+                np.clip(change, -100.0, 100.0, out=change)
+                
+                # Stability Check
+                if np.any(np.isnan(change)) or np.any(np.isinf(change)):
+                    change = np.nan_to_num(change)
+                
+                # Clamp change to avoid explosion
+                np.clip(change, -100.0, 100.0, out=change)
+                
+                if mask is not None:
+                    heightmap[:] += change * mask
                 else:
-                    heightmap[:] += delta
+                    heightmap[:] += change
 
         elif f_type == "Smooth":
             from scipy.ndimage import gaussian_filter

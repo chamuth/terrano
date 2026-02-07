@@ -1,9 +1,10 @@
 from PyQt6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QMenu, QWidget, QVBoxLayout, 
                              QToolBar, QAbstractItemView)
 from PyQt6.QtGui import QAction, QIcon, QBrush, QShortcut, QKeySequence, QPixmap, QPainter, QColor
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 from src.core.scene import TerrainEntity, FilterEntity, MaskEntity, GeneratorEntity, EntityType
 from src.core.commands import AddEntityCommand, RemoveEntityCommand, MoveEntityCommand, RenameEntityCommand, PropertyChangeCommand
+import os
 
 class HierarchyPanel(QWidget):
     def __init__(self, root_entity, undo_stack, parent=None):
@@ -23,15 +24,49 @@ class HierarchyPanel(QWidget):
         
         # Toolbar
         self.toolbar = QToolBar()
+        self.toolbar.setIconSize(QSize(20, 20))
+        self.toolbar.setStyleSheet("""
+            QToolBar {
+                border: none;
+                background: transparent;
+            }
+            QToolButton {
+                background: transparent;
+                border: 1px solid transparent;
+                padding: 2px;
+            }
+            QToolButton:hover {
+                background-color: #404040;
+                border: 1px solid #505050;
+            }
+            QToolButton:pressed {
+                background-color: #252525;
+            }
+            QToolButton:disabled {
+                opacity: 0.05;
+            }
+        """)
+        
         self.layout.addWidget(self.toolbar)
         
-        self.add_gen_action = self.toolbar.addAction("Gen")
+        assets_dir = os.path.join(os.getcwd(), "assets")
+        
+        # Generator
+        gen_icon = QIcon(os.path.join(assets_dir, "new-generator.png"))
+        self.add_gen_action = self.toolbar.addAction(gen_icon, "")
+        self.add_gen_action.setToolTip("Add Generator")
         self.add_gen_action.triggered.connect(lambda: self.add_entity_to_selection(EntityType.GENERATOR))
         
-        self.add_filter_action = self.toolbar.addAction("Filter")
+        # Filter
+        filter_icon = QIcon(os.path.join(assets_dir, "new-filter.png"))
+        self.add_filter_action = self.toolbar.addAction(filter_icon, "")
+        self.add_filter_action.setToolTip("Add Filter")
         self.add_filter_action.triggered.connect(lambda: self.add_entity_to_selection(EntityType.FILTER))
         
-        self.add_mask_action = self.toolbar.addAction("Mask")
+        # Mask
+        mask_icon = QIcon(os.path.join(assets_dir, "new-mask.png"))
+        self.add_mask_action = self.toolbar.addAction(mask_icon, "")
+        self.add_mask_action.setToolTip("Add Mask")
         self.add_mask_action.triggered.connect(lambda: self.add_entity_to_selection(EntityType.MASK))
         
         # Tree
