@@ -1,4 +1,5 @@
 import sys
+import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QDockWidget, QStatusBar, QLabel, QProgressBar, QWidget,
                              QMenuBar, QMenu, QInputDialog, QMessageBox, QDialog, QListWidget, QDialogButtonBox, QVBoxLayout, QPushButton)
 from PyQt6.QtCore import Qt, QTimer, QSettings
@@ -15,6 +16,7 @@ from src.ui.terrain_worker import TerrainWorker
 from src.ui.terrain_worker import TerrainWorker
 from src.ui.widgets.progress_indicator import QProgressIndicator
 from src.core.project import ProjectManager
+from src.core.scene import EntityType
 from PyQt6.QtWidgets import QFileDialog
 
 class EditorWindow(QMainWindow):
@@ -392,6 +394,23 @@ class EditorWindow(QMainWindow):
             pass # Was not connected
             
         entity.changed.connect(self.schedule_update)
+        
+        self.update_mask_view()
+        
+    def update_mask_view(self):
+        """Check if selected entity is a mask and update 2D viewport"""
+        entity = self.inspector.current_entity
+        if entity and entity.entity_type == EntityType.MASK:
+            # Generate mask preview
+            # We need the terrain size and resolution
+            # Resolution comes from root terrain
+            res = int(self.root_terrain.get_property("Resolution"))
+            size = self.root_terrain.get_property("Size")
+            
+            mask = entity.generate_mask((res, res), size)
+            self.viewport_2d.set_mask(mask)
+        else:
+            self.viewport_2d.set_mask(None)
     
     def schedule_update(self):
         """Debounce terrain updates - wait 300ms after last change"""
@@ -402,6 +421,8 @@ class EditorWindow(QMainWindow):
              if ent.id in self.hierarchy.items_map:
                  item = self.hierarchy.items_map[ent.id]
                  self.hierarchy.update_item_style(item, ent)
+        
+        self.update_mask_view()
         
         self.update_timer.stop()
         self.update_timer.start(300)  # 300ms debounce
@@ -514,7 +535,10 @@ class EditorWindow(QMainWindow):
             
         success, msg = self.project_manager.save_project(self.root_terrain, self.project_manager.current_project_path)
         if success:
-             self.add_recent_project(self.project_manager.current_project_path)
+             # Add file path to recent, not folder path
+             project_name = self.project_manager.project_name
+             fpath = os.path.join(self.project_manager.current_project_path, f"{project_name}.terrano")
+             self.add_recent_project(fpath)
              
         self.status_label.setText(msg)
         self.update_title()
@@ -619,6 +643,12 @@ class EditorWindow(QMainWindow):
         self.recent_menu.clear()
         recents = self.settings.value("recent_projects", [], type=list)
         if not isinstance(recents, list): recents = []
+        
+        # Filter out folder paths (keep only .terrano files)
+        valid_recents = [p for p in recents if isinstance(p, str) and p.endswith('.terrano')]
+        if len(valid_recents) != len(recents):
+            recents = valid_recents
+            self.settings.setValue("recent_projects", recents)
         
         if not recents:
             action = QAction("No Recent Files", self)

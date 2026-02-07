@@ -1,5 +1,5 @@
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 import vispy.scene
 from vispy.scene import visuals
 import numpy as np
@@ -8,9 +8,10 @@ class HeightmapViewport(QWidget):
     def __init__(self, terrain_data, road_network=None, parent=None):
         super().__init__(parent)
         self.terrain_data = terrain_data
+        self.mask_data = None # Store mask data for visualization
         
         # Vispy Canvas
-        self.canvas = vispy.scene.SceneCanvas(keys='interactive', show=True, parent=self)
+        self.canvas = vispy.scene.SceneCanvas(keys='interactive', show=True, parent=self, bgcolor='#202020')
         self.view = self.canvas.central_widget.add_view()
         
         # 2D Camera
@@ -22,14 +23,34 @@ class HeightmapViewport(QWidget):
         self.layout.addWidget(self.canvas.native)
         self.setLayout(self.layout)
         
-        # Image Visual
+        self.layout.addWidget(self.canvas.native)
+        self.setLayout(self.layout)
+        
+        # Image Visual (Foreground)
         # Interpolation: 'nearest' works well for heightmap pixel inspection, 'cubic' for smooth look
         self.image = visuals.Image(parent=self.view.scene, method='auto', interpolation='nearest', cmap='grays')
+        
+        # Status Label
+        self.lbl_mask_status = QLabel("MASK VIEW", self)
+        self.lbl_mask_status.setStyleSheet("color: white; font-weight: bold; background-color: rgba(0, 0, 0, 150); padding: 5px;")
+        self.lbl_mask_status.move(10, 10)
+        self.lbl_mask_status.hide()
         
         self.update_image()
     
     def set_data(self, terrain_data):
         self.terrain_data = terrain_data
+        self.update_image()
+        
+    def set_mask(self, mask_data):
+        self.mask_data = mask_data
+        
+        if self.mask_data is not None:
+             self.lbl_mask_status.show()
+             self.lbl_mask_status.raise_()
+        else:
+             self.lbl_mask_status.hide()
+             
         self.update_image()
         
     def reset_camera(self):
@@ -42,13 +63,21 @@ class HeightmapViewport(QWidget):
         margin = max(h, w) * 0.05
         self.view.camera.set_range(x=(-margin, w+margin), y=(-margin, h+margin))
         
+        
+        
     def update_image(self):
         # Vispy Image expects (H, W) or (H, W, 3/4)
         # TerrainData is (N, 3), we need to maintain a 2D grid representation
         # Assuming TerrainData might have raw buffer or we reshape
         
         # Check if terrain_data exposes a 2D grid directly
-        if hasattr(self.terrain_data, 'heightmap'):
+        if self.mask_data is not None:
+             # Render Mask
+             self.image.set_data(self.mask_data)
+             self.image.clim = (0, 1)
+             self.image.cmap = 'grays' # Black=0, White=1
+             
+        elif hasattr(self.terrain_data, 'heightmap'):
             # It's a 2D array of floats
             data = self.terrain_data.heightmap
             
@@ -62,5 +91,6 @@ class HeightmapViewport(QWidget):
             
             self.image.set_data(data)
             self.image.clim = (-50, 150) # Approx range, ideally dynamic
+            self.image.cmap = 'grays'
             
         self.canvas.update()

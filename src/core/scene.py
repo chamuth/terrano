@@ -519,12 +519,9 @@ class MaskEntity(Entity):
         if not self.get_property("Enabled"):
             return
 
-        # 1. Generate local mask
+        # 1. Generate local mask (Invert is handled inside generate_mask now)
         local_mask = self.generate_mask(heightmap.shape, terrain_size)
         
-        if self.get_property("Invert"):
-            local_mask = 1.0 - local_mask
-
         # 2. Combine with parent mask
         effective_mask = local_mask
         if parent_mask is not None:
@@ -552,5 +549,9 @@ class MaskEntity(Entity):
             
         elif m_type == "Square":
             mask [ int(cy-radius):int(cy+radius), int(cx-radius):int(cx+radius) ] = 1.0
+            
+        # Apply Invert
+        if self.get_property("Invert"):
+            mask = 1.0 - mask
             
         return mask

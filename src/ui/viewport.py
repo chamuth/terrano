@@ -10,6 +10,7 @@ import numpy as np
 
 class TerrainViewport(QWidget):
     mesh_stats_changed = pyqtSignal(int, int)
+    light_direction_changed = pyqtSignal(float, float, float)
 
     def __init__(self, terrain_data, road_network, on_click_callback=None, on_paint_callback=None, parent=None):
         super().__init__(parent)
@@ -28,7 +29,7 @@ class TerrainViewport(QWidget):
         # IMPORTANT: Do not set parent=self here immediately if we want to add to layout manually.
         # But SceneCanvas auto-creates a backend widget.
         # Recommended pattern for embedding:
-        self.canvas = vispy.scene.SceneCanvas(keys='interactive', show=False, parent=None)
+        self.canvas = vispy.scene.SceneCanvas(keys='interactive', show=False, parent=None, bgcolor='#202020')
         
         # Add native widget to layout
         self.layout.addWidget(self.canvas.native)
@@ -96,7 +97,8 @@ class TerrainViewport(QWidget):
         # We use a ShadingFilter to control light direction
         # Default Light: Match Camera (Azimuth 45, Elevation 45)
         # Vector approx (10, 14, 10) -> Normalized roughly (0.5, 0.7, 0.5)
-        self.light_dir = (10, 14, 10) 
+        # User requested opposite direction (keeping Y positive for overhead light)
+        self.light_dir = (-8, -15, 10) 
         self.shading_filter = ShadingFilter(shading='smooth', light_dir=self.light_dir)
         self.mesh = visuals.Mesh(color='gray', parent=self.view.scene)
         
@@ -133,6 +135,7 @@ class TerrainViewport(QWidget):
 
         self.update_mesh()
         self.mesh.attach(self.shading_filter)
+        self.light_direction_changed.emit(*self.light_dir)
         
     def set_data(self, terrain_data):
         """Update the terrain data reference"""
@@ -288,6 +291,7 @@ class TerrainViewport(QWidget):
                 
                 self.light_dir = (new_lx, new_ly, new_lz)
                 self.shading_filter.light_dir = self.light_dir[:3] 
+                self.light_direction_changed.emit(*self.light_dir)
                 self.canvas.update()
 
             self.last_pos = event.pos
