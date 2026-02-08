@@ -503,7 +503,7 @@ class FilterEntity(Entity):
         super().__init__(name, entity_type=EntityType.FILTER)
         self.define_property("Type", str, "Erosion", options=[
             "Erosion", "Thermal", "Smooth", "Sharpen", 
-            "Distort by Noise", "Terrace", "Clip"
+            "Distort by Noise", "Terrace", "Clip", "River"
         ], group="General")
         
         # Hydraulic Erosion
@@ -541,6 +541,11 @@ class FilterEntity(Entity):
         self.define_property("Clip Soft Strength", float, 0.2, 0.0, 1.0, group="Clipping")
         self.define_property("Use Min Clip", bool, False, group="Clipping")
         self.define_property("Use Max Clip", bool, False, group="Clipping")
+        
+        # River
+        self.define_property("River Threshold", float, 100.0, 1.0, 10000.0, group="River Settings")
+        self.define_property("River Strength", float, 5.0, 0.1, 50.0, group="River Settings")
+        self.define_property("River Width", float, 1.0, 0.0, 10.0, group="River Settings")
 
         # Initial Update
         self.update_visibility()
@@ -598,9 +603,38 @@ class FilterEntity(Entity):
         self.set_property_visible("Sharpen Sigma", is_sharpen)
         self.set_property_visible("Sharpen Strength", is_sharpen)
         
+        # River
+        is_river = (f_type == "River")
+        self.set_property_visible("River Threshold", is_river)
+        self.set_property_visible("River Strength", is_river)
+        self.set_property_visible("River Width", is_river)
+        
     def on_process(self, heightmap, mask, terrain_size):
         f_type = self.get_property("Type")
         
+        if f_type == "River":
+            from src.core.hydrology import fill_sinks, compute_flow_accumulation, carve_rivers
+            
+            # 1. Fill Sinks (CPU-heavy)
+            filled = fill_sinks(heightmap)
+            
+            # 2. Flow Accumulation (CPU-heavy)
+            acc = compute_flow_accumulation(filled)
+            
+            # 3. Carve (GPU/CPU)
+            threshold = self.get_property("River Threshold")
+            strength = self.get_property("River Strength")
+            width = self.get_property("River Width")
+            
+            result = carve_rivers(heightmap, acc, threshold, strength, width)
+            
+            # Update heightmap in place (or copy back)
+            # Since carve_rivers likely returns a new array (on device), we copy it back
+            # Ensure shape matches
+            heightmap[:] = result
+            
+            return
+
         if f_type == "Erosion":
             # Hydraulic Erosion (Pipe Model / Shallow Water)
             rain_amount = self.get_property("H-Rain Amount")

@@ -90,7 +90,13 @@ class MoveEntityCommand(QUndoCommand):
         # Add to new parent at index
         if self.new_parent:
              self.new_parent.add_child(self.entity, self.new_index)
-        
+             
+    def undo(self):
+        # Remove from new parent
+        if self.new_parent:
+            self.new_parent.remove_child(self.entity)
+            
+        # Add back to old parent
         if self.old_parent:
             self.old_parent.add_child(self.entity, self.old_index)
 
