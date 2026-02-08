@@ -61,12 +61,15 @@ class CollapsibleGroup(QWidget):
     def add_row(self, label, widget):
         self.content_layout.addRow(label, widget)
 from src.core.commands import PropertyChangeCommand, RenameEntityCommand, ApplyPresetCommand
+from src.core.scene import EntityType
+
 
 class InspectorPanel(QWidget):
-    def __init__(self, undo_stack, resource_manager=None, parent=None):
+    def __init__(self, undo_stack, resource_manager=None, editor_window=None, parent=None):
         super().__init__(parent)
         self.undo_stack = undo_stack
         self.resource_manager = resource_manager
+        self.editor_window = editor_window
         self.current_entity = None
         self.save_preset_callback = None
         
@@ -272,6 +275,34 @@ class InspectorPanel(QWidget):
         identity_layout.addRow("Name", name_edit)
         
         self.scroll_layout.addWidget(identity_group)
+        
+        # 1b. Drawing Controls (Special)
+        if self.current_entity and self.current_entity.entity_type == EntityType.MASK:
+             type_prop = self.current_entity.get_property("Type")
+             if type_prop == "Draw":
+                 draw_container = QWidget()
+                 draw_layout = QHBoxLayout()
+                 draw_layout.setContentsMargins(4,4,4,10)
+                 draw_container.setLayout(draw_layout)
+                 
+                 is_drawing = False
+                 if self.editor_window and getattr(self.editor_window, 'is_drawing_mode', False):
+                     is_drawing = True
+                     
+                 btn = QPushButton("Stop Drawing" if is_drawing else "Start Drawing (Locks UI)")
+                 # Make it very visible
+                 if is_drawing:
+                     btn.setStyleSheet("background-color: #d9534f; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+                     if self.editor_window:
+                         btn.clicked.connect(self.editor_window.stop_drawing)
+                 else:
+                     btn.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+                     if self.editor_window:
+                         btn.clicked.connect(self.editor_window.start_drawing)
+                         
+                 draw_layout.addWidget(btn)
+                 self.scroll_layout.addWidget(draw_container)
+
         
         # 2. Group Properties
         groups = {} # "GroupName" -> CollapsibleGroup

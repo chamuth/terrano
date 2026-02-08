@@ -56,6 +56,9 @@ class EditorWindow(QMainWindow):
         self.update_timer.setSingleShot(True)
         self.update_timer.timeout.connect(self.reprocess_terrain)
         
+        # Draw Mode State
+        self.is_drawing_mode = False
+        
         self.init_ui()
         
         # Connect Signals
@@ -98,7 +101,7 @@ class EditorWindow(QMainWindow):
         # 3D Viewport Dock
         self.dock_viewport_3d = QDockWidget("3D Scene", self)
         self.dock_viewport_3d.setObjectName("Viewport3D")
-        self.viewport_3d = TerrainViewport(self.render_data, self.road_net)
+        self.viewport_3d = TerrainViewport(self.render_data, self.road_net, on_paint_callback=self.on_paint)
         self.dock_viewport_3d.setWidget(self.viewport_3d)
         self.dock_viewport_3d.setMinimumSize(0, 0)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_3d)
@@ -106,7 +109,12 @@ class EditorWindow(QMainWindow):
         # 2D Viewport Dock
         self.dock_viewport_2d = QDockWidget("2D Heightmap", self)
         self.dock_viewport_2d.setObjectName("Viewport2D")
-        self.viewport_2d = HeightmapViewport(self.render_data)
+        # Ensure HeightmapViewport accepts callback (Update class separately)
+        try:
+             self.viewport_2d = HeightmapViewport(self.render_data, on_paint_callback=self.on_paint)
+        except TypeError:
+             self.viewport_2d = HeightmapViewport(self.render_data)
+
         self.dock_viewport_2d.setWidget(self.viewport_2d)
         self.dock_viewport_2d.setMinimumSize(0, 0)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_viewport_2d)
@@ -124,8 +132,8 @@ class EditorWindow(QMainWindow):
         # 3. Inspector (Dock Right)
         self.dock_inspector = QDockWidget("Properties", self)
         self.dock_inspector.setObjectName("Inspector")
-        # Pass resource_manager
-        self.inspector = InspectorPanel(self.undo_stack, resource_manager=self.project_manager.resource_manager)
+        # Pass resource_manager and EDITOR reference
+        self.inspector = InspectorPanel(self.undo_stack, resource_manager=self.project_manager.resource_manager, editor_window=self)
         self.inspector.save_preset_callback = self.on_save_preset # Callback
         self.dock_inspector.setWidget(self.inspector)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_inspector)
@@ -394,6 +402,8 @@ class EditorWindow(QMainWindow):
         if not items:
             self.inspector.set_entity(None)
             self.viewport_2d.set_mask(None)
+            if hasattr(self, 'viewport_3d'):
+                self.viewport_3d.set_mask(None)
             return
             
         item = items[0]
@@ -410,14 +420,27 @@ class EditorWindow(QMainWindow):
         
         # We need to listen to changes on ANY selected entity to update the view
         try:
-            entity.changed.disconnect(self.schedule_update)
+            entity.changed.disconnect(self.on_current_entity_changed)
         except:
-            pass # Was not connected
+             try:
+                 # Try disconnecting old direct connection if it exists
+                 entity.changed.disconnect(self.schedule_update)
+             except:
+                 pass
             
-        entity.changed.connect(self.schedule_update)
+        entity.changed.connect(self.on_current_entity_changed)
         
         self.update_mask_view()
         
+    def on_current_entity_changed(self):
+        """Handle changes from the currently selected entity"""
+        # If drawing, we handle updates manually in on_paint to avoid lag
+        if self.is_drawing_mode:
+            return
+
+        self.schedule_update()
+        self.update_mask_view()
+
     def update_mask_view(self):
         """Check if selected entity is a mask and update 2D viewport"""
         entity = self.inspector.current_entity
@@ -433,18 +456,22 @@ class EditorWindow(QMainWindow):
                 heightmap = self.render_data.heightmap
                 mask = entity.generate_mask(heightmap, size)
             else:
-                 # Fallback
-                 mask = entity.generate_mask((res, res), size)
-                 
+                # Fallback
+                mask = entity.generate_mask((res, res), size)
+
             self.viewport_2d.set_mask(mask)
+            if hasattr(self, 'viewport_3d'):
+                self.viewport_3d.set_mask(mask)
         else:
             self.viewport_2d.set_mask(None)
+            if hasattr(self, 'viewport_3d'):
+                self.viewport_3d.set_mask(None)
     
     def schedule_update(self):
         """Debounce terrain updates - wait 300ms after last change"""
-        # Also update hierarchy visual for the changed entity if needed
+        
+        # Update Hierarchy Visuals
         if self.inspector.current_entity:
-             # Find item for this entity
              ent = self.inspector.current_entity
              if ent.id in self.hierarchy.items_map:
                  item = self.hierarchy.items_map[ent.id]
@@ -452,6 +479,10 @@ class EditorWindow(QMainWindow):
         
         self.update_mask_view()
         
+        # Pause update if drawing
+        if self.is_drawing_mode:
+            return
+
         self.update_timer.stop()
         self.update_timer.start(300)  # 300ms debounce
 
@@ -510,7 +541,90 @@ class EditorWindow(QMainWindow):
         # Initial Fit
         if not self.initial_fit_done:
             self.fit_to_view()
+        if not self.initial_fit_done:
+            self.fit_to_view()
             self.initial_fit_done = True
+
+    def start_drawing(self):
+        if not self.inspector.current_entity: return
+        ent = self.inspector.current_entity
+        if ent.entity_type != EntityType.MASK or ent.get_property("Type") != "Draw":
+            return
+            
+        self.is_drawing_mode = True
+        self.status_label.setText("DRAW MODE: Left Click to Paint. Stop to exit.")
+        
+        # Sync Brush Size and Visibility
+        if hasattr(self, 'viewport_3d'):
+             self.viewport_3d.brush_radius = ent.get_property("Brush Size")
+             self.viewport_3d.set_brush_visible(True)
+        
+        # Lock UI
+        self.dock_hierarchy.setDisabled(True)
+        self.dock_resources.setDisabled(True)
+        
+        # Refresh Inspector to show Stop button
+        self.inspector.build_ui()
+        
+    def stop_drawing(self):
+        self.is_drawing_mode = False
+        self.status_label.setText("Ready")
+        
+        # Disable Brush Cursor
+        if hasattr(self, 'viewport_3d'):
+             self.viewport_3d.set_brush_visible(False)
+             # Ensure final mask state is visible
+             if hasattr(self.viewport_3d, 'force_mask_update'):
+                 self.viewport_3d.force_mask_update()
+        
+        self.dock_hierarchy.setDisabled(False)
+        self.dock_resources.setDisabled(False)
+        
+        # Create Undo Command? 
+        # Drawing operations modify the mask data directly.
+        # We might want to snapshot the mask data before/after for undo?
+        # For now, no undo for brush strokes (complex).
+        
+        self.inspector.build_ui()
+        
+        # Trigger terrain update
+        self.schedule_update()
+        # Force update
+        self.reprocess_terrain()
+
+    def on_paint(self, world_x, world_z, radius):
+        if not self.is_drawing_mode: return False
+        
+        ent = self.inspector.current_entity
+        if not ent: return False
+        
+        # DEBUG
+        # print(f"Paint Event: pos=({world_x:.2f}, {world_z:.2f}), radius={radius}")
+        
+        # Get properties (Override radius with Brush Size)
+        # Radius passed from viewport might be cursor size, but we trust the Property
+        strength = ent.get_property("Brush Strength")
+        opacity = ent.get_property("Brush Opacity")
+        brush_size = ent.get_property("Brush Size")
+        terrain_size = self.root_terrain.get_property("Size")
+        
+        # Sync Brush Size
+        if hasattr(self, 'viewport_3d'):
+             self.viewport_3d.brush_radius = brush_size
+        
+        ent.paint(world_x, world_z, brush_size, strength, opacity, terrain_size=terrain_size)
+        
+        # Update Preview (Optimized)
+        if hasattr(self, 'viewport_3d'):
+             # Direct update with raw data to avoid overhead
+             self.viewport_3d.set_mask(ent.mask_data)
+             
+        # No need to call this explicitly; entity.changed signal triggers schedule_update -> update_mask_view
+        # if hasattr(self, 'update_mask_view'):
+        #    self.update_mask_view()
+            
+        return True
+
 
     def closeEvent(self, event):
         if not self.check_unsaved_changes():

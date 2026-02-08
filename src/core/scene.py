@@ -4,6 +4,7 @@ from PIL import Image
 # from scipy.ndimage import gaussian_filter, laplace # Removed, using backend.ndimage
 import os
 import uuid
+import time
 from enum import Enum
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -999,10 +1000,20 @@ class MaskEntity(Entity):
         super().__init__(name, entity_type=EntityType.MASK)
         
         # Main Settings
-        self.define_property("Type", str, "Primitive", options=["Primitive", "Image", "Feature"], group="General")
+        self.define_property("Type", str, "Primitive", options=["Primitive", "Draw", "Image", "Feature"], group="General")
         self.define_property("Opacity", float, 1.0, 0.0, 1.0, group="General")
         self.define_property("Blur", float, 0.0, 0.0, 100.0, group="General")
         self.define_property("Invert", bool, False, group="General")
+
+        # Draw Settings
+        self.define_property("Brush Size", float, 50.0, 1.0, 500.0, group="Draw Settings")
+        self.define_property("Brush Strength", float, 0.5, 0.0, 1.0, group="Draw Settings")
+        self.define_property("Brush Opacity", float, 1.0, 0.0, 1.0, group="Draw Settings")
+        self.define_property("Mask Resolution", int, 512, options=[512, 1024, 2048, 4096], group="Draw Settings")
+        
+        # Internal Data
+        self.mask_data = None
+
 
         # Primitive Settings
         self.define_property("Primitive Shape", str, "Circle", options=["Circle", "Square"], group="Primitive Settings")
@@ -1037,6 +1048,14 @@ class MaskEntity(Entity):
         self.set_property_visible("Falloff", show_prim)
         self.set_property_visible("X", show_prim)
         self.set_property_visible("Y", show_prim)
+        
+        # Draw
+        show_draw = (m_type == "Draw")
+        self.set_property_visible("Brush Size", show_draw)
+        self.set_property_visible("Brush Strength", show_draw)
+        self.set_property_visible("Brush Opacity", show_draw)
+        self.set_property_visible("Mask Resolution", show_draw)
+
         
         # Image
         show_img = (m_type == "Image")
@@ -1187,6 +1206,28 @@ class MaskEntity(Entity):
             # Thresholding
             mask = ((feature_map >= min_v) & (feature_map <= max_v)).astype(xp.float32)
             
+        elif m_type == "Draw":
+            res = self.get_property("Mask Resolution")
+            if self.mask_data is None:
+                self.mask_data = xp.zeros((res, res), dtype=xp.float32)
+                
+            # Handle resolution change? 
+            # For now, if size mismatches, we assume we should use what we have, 
+            # or maybe resize mask_data?
+            # Let's enforce mask_data to match property if it was just changed?
+            # Complexity: Users might change res and lose data.
+            # Best to keep data as is, and resize on consumption if needed.
+            
+            # Match output shape (h, w)
+            if self.mask_data.shape != (h, w):
+                # Resize
+                zh = h / self.mask_data.shape[0]
+                zw = w / self.mask_data.shape[1]
+                mask = ndimage.zoom(self.mask_data, (zh, zw), order=1)
+            else:
+                mask = self.mask_data.copy()
+
+            
         # --- POST PROCESSING ---
         
         # 1. Blur (Physical units)
@@ -1204,3 +1245,101 @@ class MaskEntity(Entity):
         mask = mask * opacity
         
         return mask
+
+    def paint(self, world_x, world_z, radius, strength, opacity, erase=False, terrain_size=1000.0):
+        t0 = time.time()
+        
+        res = self.get_property("Mask Resolution")
+        if self.mask_data is None:
+            self.mask_data = xp.zeros((res, res), dtype=xp.float32)
+        elif self.mask_data.shape[0] != res:
+            # Resize existing data if resolution property changed
+            # (Simple resize for now)
+            zoom_fac = res / self.mask_data.shape[0]
+            self.mask_data = ndimage.zoom(self.mask_data, zoom_fac, order=1)
+            
+        h, w = self.mask_data.shape
+        
+        # Map World to Pixel
+        # World: [-size/2, size/2] -> [0, w]
+        x_px = (world_x + terrain_size/2) / terrain_size * w
+        y_px = (world_z + terrain_size/2) / terrain_size * h
+        r_px = radius / terrain_size * w
+        
+        # Create ROI
+        roi_r = int(np.ceil(r_px))
+        x0 = int(max(0, x_px - roi_r))
+        x1 = int(min(w, x_px + roi_r + 1))
+        y0 = int(max(0, y_px - roi_r))
+        y1 = int(min(h, y_px + roi_r + 1))
+        
+        if x0 >= x1 or y0 >= y1: return
+        
+        # Grid
+        # Optimization: Don't create full meshgrid if not needed?
+        # ROI meshgrid is fast enough usually.
+        y_grid, x_grid = xp.meshgrid(xp.arange(y0, y1), xp.arange(x0, x1), indexing='ij')
+        dist_sq = (x_grid - x_px)**2 + (y_grid - y_px)**2
+        
+        # Soft Brush (Linear Falloff)
+        # 1 at center, 0 at radius
+        # dist = sqrt(dist_sq)
+        # val = clip(1 - dist/r, 0, 1)
+        
+        dist = xp.sqrt(dist_sq)
+        brush_val = xp.clip(1.0 - dist/r_px, 0.0, 1.0)
+        
+        # Apply Logic
+        # Additive: value += strength * brush_val
+        # But capped by opacity?
+        # Let's say Opacity is the max value we can reach with this brush?
+        # Or Opacity is global alpha?
+        # Simple painting: Add
+        
+        change = brush_val * strength
+        
+        target = self.mask_data[y0:y1, x0:x1]
+        
+        if erase:
+            target -= change
+        else:
+            target += change
+            
+        xp.clip(target, 0.0, 1.0, out=target)
+        t1 = time.time()
+        print(f"DEBUG: MaskEntity.paint took {(t1-t0)*1000:.2f} ms")
+        self.mask_data[y0:y1, x0:x1] = target
+        
+        # Mark dirty to update previews
+        self.is_dirty = True
+        self.changed.emit()
+
+    def save_data(self, project_path):
+        if self.mask_data is not None:
+            # Save as NPY
+            filename = f"mask_{self.id}.npy"
+            path = os.path.join(project_path, "masks")
+            if not os.path.exists(path):
+                os.makedirs(path, exist_ok=True)
+                
+            filepath = os.path.join(path, filename)
+            
+            # Ensure CPU
+            data_cpu = to_cpu(self.mask_data)
+            np.save(filepath, data_cpu)
+            
+    def load_data(self, project_path):
+        filename = f"mask_{self.id}.npy"
+        filepath = os.path.join(project_path, "masks", filename)
+        if os.path.exists(filepath):
+            try:
+                data = np.load(filepath)
+                # Convert to Float32
+                data = data.astype(np.float32)
+                self.mask_data = to_device(data)
+                
+                # Sync resolution property
+                self.set_property("Mask Resolution", data.shape[0])
+            except Exception as e:
+                print(f"Failed to load mask data: {e}")
+

@@ -1,12 +1,12 @@
-
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtCore import pyqtSignal
 import vispy.scene
 import vispy.scene.cameras
-from vispy.scene import visuals
-import vispy.visuals.transforms 
-from vispy.visuals.filters import ShadingFilter
+import vispy.scene.visuals as visuals
+import vispy.gloo as gloo
 import numpy as np
+import time
+from vispy.visuals.filters import ShadingFilter, TextureFilter
 
 class TerrainViewport(QWidget):
     mesh_stats_changed = pyqtSignal(int, int)
@@ -15,6 +15,7 @@ class TerrainViewport(QWidget):
     def __init__(self, terrain_data, road_network, on_click_callback=None, on_paint_callback=None, parent=None):
         super().__init__(parent)
         self.terrain_data = terrain_data
+        self.mask_data = None # Store mask for visualization
         self.road_network = road_network
         self.on_click_callback = on_click_callback
         self.on_paint_callback = on_paint_callback
@@ -104,6 +105,12 @@ class TerrainViewport(QWidget):
         self.shading_filter = ShadingFilter(shading='smooth', light_dir=self.light_dir)
         self.mesh = visuals.Mesh(color='gray', parent=self.view.scene)
         
+        # Mask Texture Filter
+        # self.mask_texture = visuals.Texture2D(data=np.ones((1024, 1024, 4), dtype=np.float32), interpolation='linear', wrapping='repeat')
+        # Placeholder white texture (no tint)
+        self.mask_texture = None 
+        self.mask_filter = None
+        
         # Road Visuals
         self.road_line = visuals.Line(pos=np.array([[0,0,0], [0,0,0]]), color='red', width=10, parent=self.view.scene, method='gl')
         self.road_nodes = visuals.Markers(parent=self.view.scene)
@@ -111,6 +118,7 @@ class TerrainViewport(QWidget):
         # Brush Cursor (Circle on terrain)
         self.brush_cursor = None
         self.brush_radius = 10.0
+        self.brush_visible_override = False
         self.create_brush_cursor()
         
         # Brush state
@@ -139,10 +147,48 @@ class TerrainViewport(QWidget):
         self.mesh.attach(self.shading_filter)
         self.light_direction_changed.emit(*self.light_dir)
         
+    def _ensure_mask_filter(self, texcoords=None):
+        if self.mask_filter is None:
+             # Define dummy data
+             data = np.ones((2, 2, 4), dtype=np.float32)
+             
+             # Create explicit Texture2D for control
+             self.mask_texture = gloo.Texture2D(data, interpolation='linear')
+             
+             # Initialize Filter with DUMMY data to satisfy constructor
+             # It will create an internal texture we will immediately replace
+             tc = texcoords if texcoords is not None else 'uv'
+             self.mask_filter = TextureFilter(data, texcoords=tc)
+             
+             # OVERRIDE the filter's internal texture with our controllled object
+             self.mask_filter.fshader['u_texture'] = self.mask_texture
+             
+             self.mesh.attach(self.mask_filter)
+        elif texcoords is not None:
+             # Update texcoords if provided
+             self.mask_filter.texcoords = texcoords
+        
     def set_data(self, terrain_data):
         """Update the terrain data reference"""
         self.terrain_data = terrain_data
         self.update_mesh()
+        
+    def set_brush_visible(self, visible):
+        """Enable/Disable brush cursor (called by Editor)"""
+        self.brush_visible_override = visible
+        if not visible and self.brush_cursor:
+            self.brush_cursor.visible = False
+
+    def set_mask(self, mask_data):
+        """Set mask data for visualization"""
+        self.mask_data = mask_data
+        # Optimization: Only update colors, not whole mesh
+        self.update_colors()
+        
+    def force_mask_update(self):
+        """Force update mask colors ignoring throttle"""
+        self._last_color_update = 0
+        self.update_colors()
 
     def reset_camera(self):
         """Reset camera to default view fitting the terrain"""
@@ -218,29 +264,86 @@ class TerrainViewport(QWidget):
         self.canvas.update()
 
     def get_world_position(self, canvas_pos):
-        """Convert canvas position to world position on Y=0 plane"""
+        """Convert canvas position to Mesh Local position on Y=0 plane"""
         try:
-            transform = self.view.get_transform('canvas', 'visual')
+            # 1. Get Transform from Canvas (pixels) DIRECTLY to Mesh Local Space
+            # This accounts for camera, scaling, offsets, everything.
+            transform = self.mesh.get_transform(map_from='canvas', map_to='visual')
+            
             x, y = canvas_pos
             
-            p1 = transform.map([x, y, 0])  # Near
-            p2 = transform.map([x, y, 1])  # Far
+            # 2. Map screen points to Near/Far in Mesh Space
+            # Canvas is 2D, but we map to 3D.
+            # Usually input is (x, y, z, w) or (x, y, z).
+            # We map specific Z depths in the 'canvas' (screen) space... 
+            # Actually, standard way is mapping a Ray.
             
-            # Ray: P = p1 + t * (p2 - p1)
-            # Intersect with Y=0 plane
+            # Map start (Z=0, Near) and end (Z=1, Far) from Canvas Clip?
+            # get_transform('canvas', ...) handles the unprojection if usage is correct.
+            # Canvas coordinates [x, y] correspond to a ray.
+            # 'canvas' system usually treats Z as depth [0, 1] or [-1, 1].
+            
+            p1 = transform.map([x, y, 0])
+            p2 = transform.map([x, y, 1])
+            
+            # Convert to numpy and handle homogeneous
+            p1 = np.array(p1)
+            p2 = np.array(p2)
+            
+            if p1.shape[0] == 4: p1 = p1[:3] / p1[3]
+            if p2.shape[0] == 4: p2 = p2[:3] / p2[3]
+            
+            # print(f"DEBUG: Canvas=({x}, {y})")
+            # print(f"DEBUG: P1 (Mesh Local)={p1}")
+            # print(f"DEBUG: P2 (Mesh Local)={p2}")
+
+            # 4. Ray Intersection with Plane Y=0 (Mesh Local)
             vec = p2 - p1
+            
             if abs(vec[1]) > 1e-6:
                 t = -p1[1] / vec[1]
-                if t >= 0:
-                    intersection = p1 + t * vec
-                    return intersection
+                intersection = p1 + t * vec
+                
+                # Verify bounds? (Optional, paint handles it)
+                # print(f"DEBUG: Intersection={intersection}")
+                return intersection
+                 
         except Exception as e:
+            # print(f"DEBUG: Raycast Error: {e}")
             pass
         return None
 
     def on_mouse_move(self, event):
         """Handle panning and brush cursor"""
         
+        # 0. Always update brush cursor if not panning/rotating
+        if not self.is_rotating_light and not self.is_panning:
+             # Only update if visible
+             if self.brush_visible_override:
+                 world_pos = self.get_world_position(event.pos)
+                 if world_pos is not None:
+                     self.update_brush_cursor(world_pos[0], world_pos[2])
+                 else:
+                     if self.brush_cursor: self.brush_cursor.visible = False
+             else:
+                 # Ensure hidden if override is False
+                 if self.brush_cursor and self.brush_cursor.visible:
+                     self.brush_cursor.visible = False
+        
+        # 1. Painting (Drag)
+        if self.is_painting:
+             world_pos = self.get_world_position(event.pos)
+             if world_pos is not None:
+                 if hasattr(self, 'on_paint_callback') and self.on_paint_callback:
+                     if self.on_paint_callback(world_pos[0], world_pos[2], self.brush_radius):
+                         event.handled = True
+                         self.last_pos = event.pos
+                         return
+             
+             # If painting but off-terrain, still consume event to prevent camera spin
+             event.handled = True
+             return
+
         # Light Rotation (Alt + Left Drag)
         if self.is_rotating_light:
             if self.last_pos is not None:
@@ -353,6 +456,9 @@ class TerrainViewport(QWidget):
         self.is_panning = False
         self.is_rotating_light = False
         self.last_pos = None
+        
+        # Re-enable camera interaction
+        self.view.camera.interactive = True
 
     def on_mouse_press(self, event):
         # Middle mouse button = panning
@@ -380,14 +486,34 @@ class TerrainViewport(QWidget):
             self.is_painting = True
             self.last_pos = event.pos
             
-            # Get world position and trigger paint
+            # Get world position
             world_pos = self.get_world_position(event.pos)
-            if world_pos is not None and hasattr(self, 'on_paint_callback') and self.on_paint_callback:
-                self.on_paint_callback(world_pos[0], world_pos[2], self.brush_radius)
+            print(f"DEBUG: Mouse Press at {event.pos}, World Pos: {world_pos}")
             
-            # Also call the old click callback if it exists
-            if self.on_click_callback and world_pos is not None:
-                self.on_click_callback(world_pos[0], world_pos[2])
+            # Update Brush Cursor (always if not panning/rotating)
+            # Update Brush Cursor (always if not panning/rotating)
+            if self.brush_visible_override:
+                if world_pos is not None:
+                    self.brush_position = world_pos
+                    self.update_brush_cursor(world_pos[0], world_pos[2])
+                else:
+                    if self.brush_cursor: self.brush_cursor.visible = False
+            
+            if self.is_painting:
+                if world_pos is not None and hasattr(self, 'on_paint_callback') and self.on_paint_callback:
+                    # Check if paint was handled (active drawing mode)
+                    handled = self.on_paint_callback(world_pos[0], world_pos[2], self.brush_radius)
+                    print(f"DEBUG: on_paint_callback returned {handled}")
+                    if handled:
+                         self.view.camera.interactive = False # Force disable camera
+                         event.handled = True
+                         return # Added return here
+                    else:
+                         # Not in drawing mode, allow camera
+                         self.is_painting = False
+                else:
+                     print("DEBUG: Painting conditions failed")
+                     self.is_painting = False
         
             # Simple approach: Vispy Scene has a method to picking or mapping
             # transform = self.view.scene.transform
@@ -457,43 +583,161 @@ class TerrainViewport(QWidget):
 
 
     def update_mesh(self):
-        # Update Terrain
-        vertices, normals, faces = self.terrain_data.get_vertex_data()
-        
-        # Ensure types for Vispy (Critical)
-        vertices = vertices.astype(np.float32)
-        normals = normals.astype(np.float32)
-        faces = faces.astype(np.uint32)
-        
-        # Coloring based on height
-        y = vertices[:, 1]
-        colors = np.ones((len(vertices), 4), dtype=np.float32)
-        # Gradient
-        mn, mx = -50, 50 # expected range
-        # Avoid divide by zero
-        if mx - mn < 1e-6:
-            div = 1.0
-        else:
-            div = mx - mn
-            
-        norm = np.clip((y - mn) / div, 0, 1)
-        colors[:, 0] = norm # R
-        colors[:, 1] = 0.5 + 0.2*norm # G
-        colors[:, 2] = 0.2 # B
-        
-        if np.isnan(vertices).any() or np.isinf(vertices).any():
-            print("ERROR: Vertices contain NaN or Inf!")
+        """Rebuild the mesh geometry and mask texture"""
+        if not self.terrain_data:
             return
 
-        # Debug stats
-        print(f"Mesh Update: V={vertices.shape}, F={faces.shape}")
-        self.mesh_stats_changed.emit(len(vertices), len(faces))
+        # 1. Update Geometry
+        vertices, normals, faces = self.terrain_data.get_vertex_data()
         
-        # Pass normals expressly to avoid recalc issues
-        # Vispy set_data doesn't take normals directly, removing it. 
-        # The float32 cast above should fix the original warning.
-        # SIMPLIFICATION: Removing colors for debug
-        self.mesh.set_data(vertices=vertices, faces=faces) #, vertex_colors=colors)
+        # Cache for geometry
+        self._cached_vertices = vertices.astype(np.float32)
+        self._cached_faces = faces.astype(np.uint32)
+        
+        # Generate UV coordinates for TextureFilter
+        # Map X/Z from range [-scale/2, scale/2] to [0, 1]
+        scale = self.terrain_data.scale if hasattr(self.terrain_data, 'scale') else 1000.0
+        
+        # x is vertices[:, 0], z is vertices[:, 2] (y is up)
+        u = (vertices[:, 0] + scale/2) / scale
+        v = (vertices[:, 2] + scale/2) / scale
+        # VisPy TextureFilter uses 'texcoords' buffer
+        # Shape (N, 2)
+        texcoords = np.column_stack([u, v]).astype(np.float32)
+        
+        # 3. Upload Geometry + UVs. 
+        # We assume base color is gray.
+        gray = np.array([0.5, 0.5, 0.5, 1.0])
+        colors = np.tile(gray, (len(vertices), 1))
+        
+        # We MUST upload everything once
+        self.mesh.set_data(vertices=self._cached_vertices, faces=self._cached_faces, vertex_colors=colors, color=None)
+        
+        # Attach texcoords separately? set_data doesn't have explicit texcoords arg usually,
+        # but Mesh visual might. 
+        # Vispy Mesh set_data: vertices, faces, vertex_colors, meshdata...
+        # TextureFilter expects 'texcoords' varying. Mesh needs to provide it.
+        # mesh_data.get_vertex_data returns it if present.
+        # We can pass it to Mesh constructor, but here we update.
+        # We need to manually set the texcoords in the underlying mesh data or visual.
+        # mesh.mesh_data.set_texcoords(texcoords)? No.
+        # mesh._meshdata usually.
+        # Best way for visual:
+        # visual.shared_program['texcoord'] = texcoords (Attribute)
+        # But 'texcoords' name depends on filter. TextureFilter uses 'texcoords'.
+        # Let's try explicit attribute setting if set_data fails.
+        # Actually set_data(..., texcoords=texcoords) is supported if Visual allows?
+        # Standard Mesh visual args: vertices, faces, vertex_colors, vertex_values, color.
+        # It does NOT accept texcoords in set_data directly in some versions.
+        # We might need to set it via mesh_data.
+        
+        # Correct way for VisPy Mesh:
+        from vispy.geometry import MeshData
+        # MeshData doesn't store texcoords unless we subclass or it's a newer version?
+        # Standard VisPy MeshData uses vertex_values for attributes?
+        # But we are using a Filter which adds a Varying.
+        # We need to set the varying on the visual or filter.
+        
+        # NOTE: set_vertex_texcoords is NOT standard MeshData method.
+        # We just set data on mesh.
+        self.mesh.set_data(vertices=self._cached_vertices, faces=self._cached_faces, vertex_colors=colors)
+        
+        self._ensure_mask_filter(texcoords=texcoords)
+        self.update_colors() # Updates the Texture
+        self.mesh.update()
+        
+        self.mesh_stats_changed.emit(len(vertices), len(faces))
+
+    def update_colors(self):
+        """Update only mask texture"""
+        if not hasattr(self, '_last_color_update'):
+             self._last_color_update = 0
+             
+        now = time.time()
+        if now - self._last_color_update < 0.05:
+             return
+        self._last_color_update = now
+
+        self._ensure_mask_filter()
+
+        if self.mask_data is not None:
+             t_start = time.time()
+             from src.core.backend import to_cpu
+             mask_cpu = to_cpu(self.mask_data)
+             
+             # Convert to Texture (RGBA)
+             # Red Overlay:
+             # Mask=0 -> White (1,1,1,1) (Multiplies to Gray)
+             # Mask=1 -> Red (1,0,0,1) (Multiplies to Dark Red)
+             
+             # Optimized CPU conversion
+             # texture = White
+             # G, B = 1.0 - mask
+             
+             # (H, W) -> (H, W, 4)
+             h, w = mask_cpu.shape
+             
+             # Use float32 texture for simplicity? Or Uint8?
+             # Uint8 is 4x smaller bandwidth.
+             # R=255, A=255.
+             # G, B = (1-mask)*255.
+             
+             mask_u8 = (mask_cpu * 255).astype(np.uint8)
+             inv_mask_u8 = 255 - mask_u8
+             
+             texture_data = np.full((h, w, 4), 255, dtype=np.uint8)
+             texture_data[:, :, 1] = inv_mask_u8 # G
+             texture_data[:, :, 2] = inv_mask_u8 # B
+             
+             # Upload Texture
+             # set_data is fast for textures
+             # self.mask_texture.set_data(texture_data)
+             
+             # Upload Texture
+             # set_data is fast for textures
+             if self.mask_texture is not None:
+                 self.mask_texture.set_data(texture_data)
+                 
+             # Access internal texture from filter
+             # VisPy TextureFilter uses 'u_texture' uniform
+             # if self.mask_filter and hasattr(self.mask_filter, 'texture'):
+             #    self.mask_filter.texture.set_data(texture_data)
+             
+             t_end = time.time()
+             print(f"DEBUG: update_mask_texture took {(t_end-t_start)*1000:.2f}ms")
+             
+             self.mesh.update()
+        else:
+             # Reset to white if no mask
+             # 1x1 white texture (255, 255, 255, 255)
+             # We check if it's already 2x2 to avoid redundant updates
+             # But self.mask_texture might be large from previous mask.
+             # So we always reset if it's not the default size, or just force it.
+             # Creating a small buffer is cheap.
+             if self.mask_texture is not None:
+                 # Check if we need to resize/reset
+                 # We can just set a small 2x2 white texture.
+                 # Note: gloo.Texture2D.set_data might error if size changes?
+                 # No, set_data updates subregion if args provided, or whole if not.
+                 # But if shape changes, we might need to resize.
+                 # resize() exists on Texture2D.
+                 
+                 # Simplest: Update with 1x1 white pixel if we can't resize easily?
+                 # Shaders use UVs. 1x1 white texture covers everything if UVs are 0..1.
+                 
+                 # Let's try resizing to 2x2 and setting white.
+                 data = np.full((2, 2, 4), 255, dtype=np.uint8)
+                 try:
+                     self.mask_texture.set_data(data) # This might fail if size mismatch
+                 except:
+                     # If set_data fails due to size, we might need to resize first or Create new?
+                     # Re-creating might break the filter binding?
+                     # Wrapper 'Texture2D' might handle it?
+                     # Native gloo texture: .resize(shape)
+                     self.mask_texture.resize((2, 2, 4))
+                     self.mask_texture.set_data(data)
+                 
+                 self.mesh.update()
         
         # Update Road
         spline = self.road_network.get_spline_points()

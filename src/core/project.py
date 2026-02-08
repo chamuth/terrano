@@ -48,6 +48,10 @@ class ProjectManager:
             if root_entity:
                 root_entity.set_cache_dir(cache_dir, recursive=True)
                 
+            # Save Entity Data (e.g. Masks)
+            if root_entity:
+                self._save_entity_data(root_entity, folder_path)
+                
             # Refresh Resources (in case new files were created or path changed)
             self.resource_manager.refresh()
                 
@@ -80,6 +84,10 @@ class ProjectManager:
             if root_entity:
                 root_entity.set_cache_dir(cache_dir, recursive=True)
             
+            # Load Entity Data
+            if root_entity:
+                self._load_entity_data(root_entity, self.current_project_path)
+            
             # Refresh Resources
             self.resource_manager.refresh()
             
@@ -87,3 +95,22 @@ class ProjectManager:
             
         except Exception as e:
             return None, f"Error loading project: {str(e)}"
+
+    def _save_entity_data(self, entity, project_path):
+        if entity is None: return
+        
+        if hasattr(entity, 'save_data'):
+            entity.save_data(project_path)
+            
+        for child in entity._children:
+            self._save_entity_data(child, project_path)
+
+    def _load_entity_data(self, entity, project_path):
+        if entity is None: return
+        
+        if hasattr(entity, 'load_data'):
+            entity.load_data(project_path)
+            
+        for child in entity._children:
+            self._load_entity_data(child, project_path)
+
