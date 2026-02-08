@@ -15,10 +15,12 @@ class ResourceManager(QObject):
         super().__init__()
         self.project_manager = project_manager
         
-        # Structure: { "Presets": [], "Images": [], "Other": [] }
+        # Structure: { "Generators": [], "Filters": [], "Presets": [], "Images": [], "Other": [] }
         # Items are dicts: { "name": "...", "path": "...", "type": "..." }
         self.resources = {
-            "Presets": [],
+            "Generators": [],
+            "Filters": [],
+            "Presets": [], # Fallback for unknown preset types or generic ones
             "Images": [],
             "Other": []
         }
@@ -30,11 +32,6 @@ class ResourceManager(QObject):
             return
 
         self.clear_resources()
-        
-        # Recursive scan or flat? 
-        # Let's do recursive but flatter the structure for now, or keep folder hierarchy?
-        # User requirement: "resources organized in folders/kind"
-        # We'll just scan everything and categorize by extension for the MVP root folders.
         
         root_path = self.project_manager.current_project_path
         
@@ -67,8 +64,16 @@ class ResourceManager(QObject):
                             data = json.load(f)
                             if "type" in data and "properties" in data:
                                 item["type"] = "Preset"
-                                item["preset_type"] = data["type"] # e.g. "GENERATOR", "FILTER"
-                                self.resources["Presets"].append(item)
+                                preset_type = data.get("type")
+                                item["preset_type"] = preset_type
+                                
+                                if preset_type == "GENERATOR":
+                                    self.resources["Generators"].append(item)
+                                elif preset_type == "FILTER":
+                                    self.resources["Filters"].append(item)
+                                else:
+                                    self.resources["Presets"].append(item)
+
                             elif "terrano" in ext:
                                 # Project file, ignore or list as Project
                                 pass 
@@ -89,6 +94,8 @@ class ResourceManager(QObject):
         
     def clear_resources(self):
         self.resources = {
+            "Generators": [],
+            "Filters": [],
             "Presets": [],
             "Images": [],
             "Other": []
@@ -97,7 +104,16 @@ class ResourceManager(QObject):
     def get_presets(self, entity_type_name):
         """Get all presets matching the given entity type name (e.g. 'GENERATOR')."""
         matching = []
-        for item in self.resources["Presets"]:
+        # Decide which list to search based on type name
+        source_list = []
+        if entity_type_name == "GENERATOR":
+            source_list = self.resources["Generators"]
+        elif entity_type_name == "FILTER":
+            source_list = self.resources["Filters"]
+        else:
+            source_list = self.resources["Presets"]
+            
+        for item in source_list:
             if item.get("preset_type") == entity_type_name:
                 matching.append(item)
         return matching
@@ -111,17 +127,20 @@ class ResourceManager(QObject):
         if not filename.endswith(".json") and not filename.endswith(".preset"):
             filename += ".preset"
             
-        # Create 'Presets' folder if it doesn't exist? 
-        # Or just save in root? Let's save in a 'Presets' folder for organization by default.
-        presets_dir = os.path.join(self.project_manager.current_project_path, "Presets")
-        if not os.path.exists(presets_dir):
-            os.makedirs(presets_dir)
+        # Determine folder based on entity type
+        folder_name = "Presets"
+        if entity.entity_type.name == "GENERATOR":
+            folder_name = "Generators"
+        elif entity.entity_type.name == "FILTER":
+            folder_name = "Filters"
             
-        full_path = os.path.join(presets_dir, filename)
+        target_dir = os.path.join(self.project_manager.current_project_path, folder_name)
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+            
+        full_path = os.path.join(target_dir, filename)
         
         try:
-            # We serialize the entity but maybe valid only for its type?
-            # We should store type check.
             data = SceneSerializer.serialize_entity(entity)
             
             # Add metadata that it is a preset

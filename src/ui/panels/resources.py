@@ -58,7 +58,7 @@ class ResourcesPanel(QWidget):
         self.category_list.clear()
         
         # Hardcoded categories based on ResourceManager structure
-        categories = ["Presets", "Images", "Other"]
+        categories = ["Generators", "Filters", "Images", "Other"]
         
         for cat in categories:
             item = QListWidgetItem(cat)
