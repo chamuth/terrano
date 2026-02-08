@@ -27,6 +27,10 @@ class Entity(QObject):
         self.entity_type = entity_type
         self._parent = None
         self._children = []
+        
+        # Track if user has manually renamed this entity
+        self._has_custom_name = False
+        
         # _enabled is now redundant with properties["Enabled"], but helpful for quick access
         # However, plan says "Add property" so UI can see it.
         # We'll sync them.
@@ -98,8 +102,16 @@ class Entity(QObject):
         
     @name.setter
     def name(self, value):
-        self._name = value
-        self.renamed.emit()
+        if self._name != value:
+            self._name = value
+            self._has_custom_name = True
+            self.renamed.emit()
+            
+    def set_name_automatic(self, new_name):
+        """Sets name ONLY if user hasn't customized it."""
+        if not self._has_custom_name and self._name != new_name:
+            self._name = new_name
+            self.renamed.emit()
 
     def set_parent(self, parent):
         if self._parent == parent:
@@ -288,6 +300,11 @@ class GeneratorEntity(Entity):
             "Perlin Noise", "Simplex Noise", "Gabor Noise", "Alligator Noise", 
             "Voronoi", "Pattern", "Constant"
         ], group="General")
+        
+        # Check if name is generic, if so, auto-name immediately
+        if name in ["Generator", "New Generator"]:
+            self.set_name_automatic("Perlin Noise")
+            
         self.define_property("Strength", float, 1.0, 0.0, 1.0, group="General")
         self.define_property("Operation", str, "Add", options=["Add", "Subtract", "Replace", "Multiply"], group="General")
         
@@ -330,6 +347,7 @@ class GeneratorEntity(Entity):
     def on_property_changed(self, name, value):
         if name == "Type":
             self.update_property_visibility()
+            self.set_name_automatic(value)
         # Mark dirty on any property change
 
         self.mark_dirty()
@@ -506,6 +524,10 @@ class FilterEntity(Entity):
             "Distort by Noise", "Terrace", "Clip", "River"
         ], group="General")
         
+        # Check if name is generic, if so, auto-name immediately
+        if name in ["Filter", "New Filter"]:
+             self.set_name_automatic("Erosion")
+        
         # Hydraulic Erosion
         self.define_property("H-Iterations", int, 50, 1, 200, group="Hydraulic Erosion")
         self.define_property("H-Rain Amount", float, 0.01, 0.0, 1.0, group="Hydraulic Erosion")
@@ -553,6 +575,7 @@ class FilterEntity(Entity):
     def on_property_changed(self, name, value):
         if name == "Type":
             self.update_visibility()
+            self.set_name_automatic(value)
         self.mark_dirty()
 
     def update_visibility(self):
