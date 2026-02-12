@@ -9,6 +9,7 @@ from src.core.scene import TerrainEntity
 from src.core.terrain_data import TerrainData
 from src.ui.panels.hierarchy import HierarchyPanel
 from src.ui.panels.inspector import InspectorPanel
+from src.ui.panels.export import ExportPanel
 from src.ui.viewport import TerrainViewport
 from src.ui.heightmap_viewport import HeightmapViewport
 from src.core.roads import RoadNetwork
@@ -138,7 +139,17 @@ class EditorWindow(QMainWindow):
         self.dock_inspector.setWidget(self.inspector)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_inspector)
         
-        # 3b. Resources (Dock Left, Tabbed with Hierarchy usually or Bottom)
+        # 3b. Export Panel (Dock Right, Tabbed with Inspector)
+        self.dock_export = QDockWidget("Export", self)
+        self.dock_export.setObjectName("Export")
+        self.export_panel = ExportPanel(editor_window=self)
+        self.dock_export.setWidget(self.export_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_export)
+        
+        # Tabify Export with Inspector
+        self.tabifyDockWidget(self.dock_inspector, self.dock_export)
+        
+        # 3c. Resources (Dock Left, Tabbed with Hierarchy usually or Bottom)
         self.dock_resources = QDockWidget("Resources", self)
         self.dock_resources.setObjectName("Resources")
         # We need to access project_manager from editor
@@ -247,6 +258,13 @@ class EditorWindow(QMainWindow):
         save_as_action.setShortcut("Ctrl+Shift+S")
         save_as_action.triggered.connect(self.save_project_as)
         file_menu.addAction(save_as_action)
+        
+        file_menu.addSeparator()
+        
+        export_all_action = QAction("Export &All...", self)
+        export_all_action.setShortcut("Ctrl+E")
+        export_all_action.triggered.connect(self.export_all_dialog)
+        file_menu.addAction(export_all_action)
         
         file_menu.addSeparator()
         
@@ -401,6 +419,7 @@ class EditorWindow(QMainWindow):
         items = self.hierarchy.tree.selectedItems()
         if not items:
             self.inspector.set_entity(None)
+            self.export_panel.set_entity(None)
             self.viewport_2d.set_mask(None)
             if hasattr(self, 'viewport_3d'):
                 self.viewport_3d.set_mask(None)
@@ -417,6 +436,7 @@ class EditorWindow(QMainWindow):
             return
         
         self.inspector.set_entity(entity)
+        self.export_panel.set_entity(entity)
         
         # We need to listen to changes on ANY selected entity to update the view
         try:
@@ -840,6 +860,86 @@ class EditorWindow(QMainWindow):
             QMessageBox.critical(self, "Error", msg)
             # Optionally remove from list if not found
             # self.remove_recent(path)
+    
+    def get_current_heightmap(self):
+        """Return current terrain heightmap for export."""
+        if hasattr(self, 'render_data') and self.render_data.heightmap is not None:
+            return self.render_data.heightmap
+        return None
+    
+    def export_all_dialog(self):
+        """Show Export All dialog with progress tracking."""
+        from PyQt6.QtWidgets import QProgressDialog
+        from src.core.exporter import export_all
+        
+        # Default to project_folder/output if project is saved
+        default_folder = ""
+        if self.project_manager.current_project_path:
+            default_folder = os.path.join(
+                self.project_manager.current_project_path,
+                "output"
+            )
+        
+        # Prompt for output folder
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Export Folder",
+            default_folder,
+            QFileDialog.Option.ShowDirsOnly
+        )
+        
+        if not folder:
+            return
+        
+        # Count exportable entities
+        def count_exportable(entity):
+            count = 0
+            if entity.entity_type == EntityType.ROOT or entity.entity_type == EntityType.MASK:
+                count = 1
+            for child in entity.get_children():
+                count += count_exportable(child)
+            return count
+        
+        total_count = count_exportable(self.root_terrain)
+        
+        if total_count == 0:
+            QMessageBox.information(self, "Export All", "No exportable entities found.")
+            return
+        
+        # Create progress dialog
+        progress = QProgressDialog("Exporting...", "Cancel", 0, total_count, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        
+        # Progress callback
+        def update_progress(entity_name, current, total):
+            progress.setLabelText(f"Exporting: {entity_name}")
+            progress.setValue(current)
+            QApplication.processEvents()  # Keep UI responsive
+            
+            if progress.wasCanceled():
+                return False
+            return True
+        
+        # Perform export
+        success, message, exported_files = export_all(
+            self.root_terrain,
+            self.render_data,
+            folder,
+            progress_callback=update_progress
+        )
+        
+        progress.close()
+        
+        # Show result
+        if success:
+            summary = f"Successfully exported {len(exported_files)} file(s) to:\n{folder}"
+            QMessageBox.information(self, "Export All Complete", summary)
+            self.status_label.setText(f"Exported {len(exported_files)} file(s)")
+        else:
+            QMessageBox.critical(self, "Export All Failed", message)
+            self.status_label.setText("Export failed")
 
 class ManageLayoutsDialog(QDialog):
     def __init__(self, settings, parent=None):

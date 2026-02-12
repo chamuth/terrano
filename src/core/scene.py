@@ -276,6 +276,18 @@ class TerrainEntity(Entity):
         self.define_property("Size", float, 1000.0, 100.0, 10000.0, group="Dimensions") # Physical Size
         self.define_property("Base Height", float, 0.0, -1000.0, 1000.0, group="General")
         
+        # Export Settings (hidden from inspector by default)
+        self.define_property("Export Resolution", str, "2048", options=["512", "1024", "2048", "4096", "8192"], group="Export Settings")
+        self.define_property("Export Format", str, "TIFF (32-bit)", options=["TIFF (32-bit)", "PNG (16-bit)", "JPEG (8-bit)", "OBJ Mesh"], group="Export Settings")
+        self.define_property("Export Filename", str, "", group="Export Settings")  # Empty = use entity ID
+        self.define_property("Export Directory", str, "output", group="Export Settings")
+        
+        # Hide export settings from inspector
+        self.set_property_visible("Export Resolution", False)
+        self.set_property_visible("Export Format", False)
+        self.set_property_visible("Export Filename", False)
+        self.set_property_visible("Export Directory", False)
+        
     def on_process(self, heightmap, mask, terrain_size):
         # Base terrain just clears the heightmap to base height
         # But commonly Generators will overwrite this immediately.
@@ -1030,6 +1042,18 @@ class MaskEntity(Entity):
         self.define_property("Min Val", float, 0.0, -10000.0, 10000.0, group="Feature Settings")
         self.define_property("Max Val", float, 1000.0, -10000.0, 10000.0, group="Feature Settings")
         self.define_property("Ramp", float, 0.0, 0.0, 1.0, group="Feature Settings")
+        
+        # Export Settings (hidden from inspector by default)
+        self.define_property("Export Resolution", str, "2048", options=["512", "1024", "2048", "4096", "8192"], group="Export Settings")
+        self.define_property("Export Format", str, "PNG (16-bit)", options=["TIFF (32-bit)", "PNG (16-bit)", "JPEG (8-bit)"], group="Export Settings")
+        self.define_property("Export Filename", str, "", group="Export Settings")  # Empty = use entity ID
+        self.define_property("Export Directory", str, "output", group="Export Settings")
+        
+        # Hide export settings from inspector
+        self.set_property_visible("Export Resolution", False)
+        self.set_property_visible("Export Format", False)
+        self.set_property_visible("Export Filename", False)
+        self.set_property_visible("Export Directory", False)
         
         # Initial visibility update
         self.update_visibility()
